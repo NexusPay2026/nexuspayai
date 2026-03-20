@@ -1352,7 +1352,31 @@ html,body{height:100%;overflow:hidden;background:var(--void);color:var(--t1);fon
 <script>
 'use strict';
 // ═══════════════════════════════════════════════════════════════
-//  PERSISTENT STORAGE LAYER
+//  NEXUSPAY API LAYER — Phase 2
+//  Backend: https://nexuspay-api-ochi.onrender.com
+// ═══════════════════════════════════════════════════════════════
+var API_BASE = 'https://nexuspay-api-ochi.onrender.com';
+var _jwt = '';
+try { _jwt = localStorage.getItem('np_jwt') || ''; } catch(e) {}
+
+function _setJwt(t) {
+  _jwt = t || '';
+  try { if(t) localStorage.setItem('np_jwt',t); else localStorage.removeItem('np_jwt'); } catch(e) {}
+}
+
+async function _api(method, path, body) {
+  var opts = { method:method, headers:{'Content-Type':'application/json'} };
+  if (_jwt) opts.headers['Authorization'] = 'Bearer ' + _jwt;
+  if (body) opts.body = JSON.stringify(body);
+  try {
+    var resp = await fetch(API_BASE + path, opts);
+    var data = await resp.json();
+    if (!resp.ok) return { ok:false, status:resp.status, error:data.detail||data.message||'Request failed' };
+    return { ok:true, data:data };
+  } catch(err) { return { ok:false, status:0, error:'Network error: '+err.message }; }
+}
+
+// ═══════════════════════════════════════════════════════════════
 //  Writes to BOTH localStorage (sync, local file) AND
 //  window.storage (Claude artifact persistent storage, cross-session).
 //  Reads localStorage first (instant), then hydrates from window.storage.
@@ -1619,24 +1643,27 @@ function loginTab(tab) {
 }
 
 // ── DEMO LOGIN (one-click) ─────────────────────────────────
-function doDemoLogin() {
-  allUsers = _loadUsers(); // Reload fresh
-  var found = allUsers.find(function(u) { return u.email === 'demo@nexuspayservices.com' && u.active; });
-  if (found) {
-    _loginAs(found);
-  } else {
-    toast('Demo account unavailable — contact admin', 'err');
-  }
+async function doDemoLogin() {
+  var errEl = document.getElementById('login-error');
+  errEl.textContent = 'Launching demo...'; errEl.style.display = 'block';
+  errEl.style.color = 'var(--t3)'; errEl.style.background = 'rgba(255,255,255,.03)';
+  var r = await _api('POST', '/api/login', { email:'demo@nexuspayservices.com', password:'Demo2026!' });
+  errEl.style.color = ''; errEl.style.background = ''; errEl.style.display = 'none';
+  if (!r.ok) { toast('Demo unavailable: ' + r.error, 'err'); return; }
+  _setJwt(r.data.token);
+  _loginAs({
+    email:r.data.email, role:r.data.role, displayName:r.data.display_name,
+    company:r.data.company||'', assignedMerchants:r.data.assigned_merchants||[],
+    tier:r.data.tier||'free', veteran:r.data.veteran||false, mustChangePassword:false
+  });
 }
 
 // ── LOGIN ───────────────────────────────────────────────────
 var _loginLock = false;
-function doLogin() {
+async function doLogin() {
   if (_loginLock) return;
   _loginLock = true;
-  setTimeout(function(){ _loginLock = false; }, 500);
-  // CRITICAL: Always reload users from localStorage to pick up password changes
-  allUsers = _loadUsers();
+  setTimeout(function(){ _loginLock = false; }, 1000);
   var emailEl = document.getElementById('login-email');
   var passEl  = document.getElementById('login-pass');
   var errEl   = document.getElementById('login-error');
@@ -1645,41 +1672,26 @@ function doLogin() {
   errEl.style.display = 'none';
   document.getElementById('login-success').style.display = 'none';
   if (!email || !pass) { errEl.textContent = 'Enter both email and password'; errEl.style.display = 'block'; return; }
-  var found = allUsers.find(function(u) { return u.email.toLowerCase() === email && u.password === pass && u.active; });
-  if (!found) {
-    // Diagnose the exact failure
-    var byEmail = allUsers.find(function(u) { return u.email.toLowerCase() === email; });
-    if (!byEmail) {
-      errEl.textContent = 'No account found for ' + email + '. Check your email or create an account.';
-    } else if (!byEmail.active) {
-      errEl.textContent = 'Account deactivated. Contact admin@nexuspayservices.com.';
-    } else if (byEmail.password !== pass) {
-      // Password mismatch — give helpful message
-      if (byEmail.mustChangePassword) {
-        errEl.textContent = 'Your password was recently reset. Use the temporary password sent by your admin.';
-      } else {
-        errEl.textContent = 'Incorrect password. Use "Forgot your password?" to reset it.';
-      }
-    } else {
-      errEl.textContent = 'Login failed. Contact admin@nexuspayservices.com.';
-    }
+
+  errEl.textContent = 'Signing in...'; errEl.style.display = 'block';
+  errEl.style.color = 'var(--t3)'; errEl.style.background = 'rgba(255,255,255,.03)'; errEl.style.borderColor = 'var(--b2)';
+
+  var r = await _api('POST', '/api/login', { email: email, password: pass });
+  errEl.style.color = ''; errEl.style.background = ''; errEl.style.borderColor = '';
+
+  if (!r.ok) {
+    errEl.textContent = r.error;
     errEl.style.display = 'block'; passEl.value = ''; passEl.focus(); return;
   }
-  // Check email verification (skip for admin, employee, client, demo — only self-registered)
-  if (found.role === 'user' && found.verified === false) {
-    _setPendingVerifyEmail(found.email);
-    // Auto-resend a fresh code and show it immediately
-    var code = _genCode();
-    _pendingCodes[found.email] = { code:code, type:'verify', expires:Date.now()+900000 };
-    _savePendingCodes();
-    document.getElementById('verify-msg').innerHTML =
-      'Your email is not yet verified. Your verification code:' +
-      '<span style="display:block;font-size:28px;font-weight:700;color:var(--lime);letter-spacing:8px;margin:12px 0">' + code + '</span>' +
-      '<span style="font-size:8px;color:var(--t4)">Enter this code below to verify ' + esc(found.email) + '</span>';
-    _sendVerificationEmail(found.email, found.displayName, code);
-    loginTab('verify');
-    return;
-  }
+
+  _setJwt(r.data.token);
+  var found = {
+    email: r.data.email, role: r.data.role, displayName: r.data.display_name,
+    company: r.data.company || '', assignedMerchants: r.data.assigned_merchants || [],
+    tier: r.data.tier || 'free', veteran: r.data.veteran || false,
+    mustChangePassword: r.data.must_change_password
+  };
+  errEl.style.display = 'none';
   _loginAs(found);
 }
 
@@ -1713,7 +1725,7 @@ function _completeLogin(found) {
 }
 
 var _forceChangeLock = false;
-function doForceChangePassword() {
+async function doForceChangePassword() {
   if (_forceChangeLock) return;
   _forceChangeLock = true;
   setTimeout(function(){ _forceChangeLock = false; }, 500);
@@ -1723,21 +1735,21 @@ function doForceChangePassword() {
   var p2 = (document.getElementById('change-newpass2').value||'');
   if (p1.length < 8) { errEl.textContent = 'Password must be at least 8 characters'; errEl.style.display = 'block'; return; }
   if (p1 !== p2) { errEl.textContent = 'Passwords do not match'; errEl.style.display = 'block'; return; }
-  if (!_forceChangeUser) { errEl.textContent = 'Session error — please sign in again'; errEl.style.display = 'block'; return; }
-  // Update the user record
-  var user = allUsers.find(function(u) { return u.email === _forceChangeUser.email; });
-  if (!user) { errEl.textContent = 'User not found — please sign in again'; errEl.style.display = 'block'; loginTab('signin'); return; }
-  user.password = p1;
-  user.mustChangePassword = false;
-  user.passwordChangedAt = Date.now();
-  var saved = _saveUsers();
-  if (!saved) { errEl.textContent = 'Error saving password. Please try again.'; errEl.style.display = 'block'; return; }
-  // Verify by reloading from localStorage
-  var verify = _loadUsers();
-  var vUser = verify.find(function(u) { return u.email === _forceChangeUser.email; });
-  if (!vUser || vUser.password !== p1) { errEl.textContent = 'Password verification failed — please try again'; errEl.style.display = 'block'; return; }
-  allUsers = verify;
-  var found = _forceChangeUser;
+  if (!_forceChangeUser) { errEl.textContent = 'Session error — please sign in again'; errEl.style.display = 'block'; loginTab('signin'); return; }
+
+  var r = await _api('POST', '/api/change-password', { email: _forceChangeUser.email, new_password: p1 });
+  if (!r.ok) { errEl.textContent = r.error; errEl.style.display = 'block'; return; }
+
+  // Login with new password to get fresh JWT
+  var lr = await _api('POST', '/api/login', { email: _forceChangeUser.email, password: p1 });
+  if (!lr.ok) { errEl.textContent = 'Password changed but login failed: ' + lr.error; errEl.style.display = 'block'; return; }
+
+  _setJwt(lr.data.token);
+  var found = {
+    email:lr.data.email, role:lr.data.role, displayName:lr.data.display_name,
+    company:lr.data.company||'', assignedMerchants:lr.data.assigned_merchants||[],
+    tier:lr.data.tier||'free', veteran:lr.data.veteran||false, mustChangePassword:false
+  };
   _setForceChangeUser(null);
   document.getElementById('change-newpass').value = '';
   document.getElementById('change-newpass2').value = '';
@@ -1873,7 +1885,7 @@ function _composeResetEmail(toEmail, name, tempPass) {
 
 // ── SELF-REGISTRATION WITH VERIFICATION ─────────────────────
 var _registerLock = false;
-function doRegister() {
+async function doRegister() {
   if (_registerLock) return;
   _registerLock = true;
   setTimeout(function(){ _registerLock = false; }, 500);
@@ -1892,35 +1904,20 @@ function doRegister() {
   if (pass !== pass2) { errEl.textContent = 'Passwords do not match'; errEl.style.display = 'block'; return; }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { errEl.textContent = 'Enter a valid email address'; errEl.style.display = 'block'; return; }
 
-  var exists = allUsers.find(function(u) { return u.email.toLowerCase() === email; });
-  if (exists) { errEl.textContent = 'An account with this email already exists. Sign in instead.'; errEl.style.display = 'block'; return; }
+  errEl.textContent = 'Creating account...'; errEl.style.display = 'block';
+  errEl.style.color = 'var(--t3)'; errEl.style.background = 'rgba(255,255,255,.03)';
 
-  // Create account as UNVERIFIED
-  var newUser = {
-    email:email, password:pass, role:'user',
-    displayName:name, company:company,
-    assignedMerchants:[], active:true, verified:false,
-    veteran:veteran,
-    createdBy:'self-register', createdAt:Date.now()
-  };
-  allUsers.push(newUser);
-  _saveUsers();
+  var r = await _api('POST', '/api/register', { name:name, email:email, password:pass, company:company, veteran:veteran });
+  errEl.style.color = ''; errEl.style.background = ''; errEl.style.display = 'none';
 
-  // Generate verification code
-  var code = _genCode();
-  _pendingCodes[email] = { code:code, type:'verify', expires:Date.now()+900000 }; // 15 min
-  _savePendingCodes();
-  _setPendingVerifyEmail(email);
+  if (!r.ok) { errEl.textContent = r.error; errEl.style.display = 'block'; return; }
 
-  // Show verification pane WITH THE CODE immediately (email is bonus)
-  document.getElementById('verify-msg').innerHTML =
-    'Your verification code for <strong style="color:var(--t1)">' + esc(email) + '</strong>:' +
-    '<span style="display:block;font-size:28px;font-weight:700;color:var(--lime);letter-spacing:8px;margin:12px 0">' + code + '</span>' +
-    '<span style="font-size:8px;color:var(--t4)">This code expires in 15 minutes. Enter it below to verify your email.</span>';
-  loginTab('verify');
-
-  // Try to email in background (silent — won't affect UI if it fails)
-  _sendVerificationEmail(email, name, code);
+  loginTab('signin');
+  setTimeout(function() {
+    var s = document.getElementById('login-success');
+    s.textContent = '✓ Account created! Sign in with your credentials.';
+    s.style.display = 'block';
+  }, 50);
 }
 
 function _sendVerificationEmail(email, name, code) {
@@ -1998,7 +1995,7 @@ try { _forgotEmail = sessionStorage.getItem('np_forgotEmail') || ''; } catch(e) 
 function _setForgotEmail(v) { _forgotEmail = v; try { sessionStorage.setItem('np_forgotEmail', v); } catch(e) {} }
 
 var _forgotLock = false;
-function doForgotPassword() {
+async function doForgotPassword() {
   if (_forgotLock) return;
   _forgotLock = true;
   setTimeout(function(){ _forgotLock = false; }, 500);
@@ -2009,33 +2006,27 @@ function doForgotPassword() {
   if (!email) { errEl.textContent = 'Enter your email address'; errEl.style.display = 'block'; return; }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { errEl.textContent = 'Enter a valid email address'; errEl.style.display = 'block'; return; }
 
-  // CRITICAL: Always reload from localStorage to find users onboarded in other sessions
-  allUsers = _loadUsers();
-  var user = allUsers.find(function(u){return u.email.toLowerCase()===email;});
-  if (!user) { errEl.textContent = 'No account found with this email'; errEl.style.display = 'block'; return; }
-  if (!user.active) { errEl.textContent = 'Account deactivated. Contact admin.'; errEl.style.display = 'block'; return; }
+  var r = await _api('POST', '/api/forgot-password', { email: email });
+  if (!r.ok) { errEl.textContent = r.error; errEl.style.display = 'block'; return; }
 
-  // Generate reset code
-  var code = _genCode();
-  _pendingCodes[email] = { code:code, type:'reset', expires:Date.now()+900000 };
-  _savePendingCodes();
-  _setForgotEmail(email);
-
-  // Show step 2 WITH THE CODE displayed prominently
-  document.getElementById('forgot-step1').style.display = 'none';
-  document.getElementById('forgot-step2').style.display = 'block';
-
-  // Show the code right in the success banner so user can see it
+  // Show temp password — user signs in with it, then forced to change
   succEl.innerHTML =
     '<div style="text-align:center">' +
-      'Your reset code for <strong>' + esc(email) + '</strong>:' +
-      '<div style="font-size:28px;font-weight:700;color:var(--lime);letter-spacing:8px;margin:8px 0">' + code + '</div>' +
-      '<div style="font-size:8px;color:var(--t4)">Enter this code below with your new password.</div>' +
+      'Your temporary password for <strong>' + esc(email) + '</strong>:' +
+      '<div style="font-size:22px;font-weight:700;color:var(--lime);letter-spacing:4px;margin:8px 0;user-select:all">' + esc(r.data.temp_password) + '</div>' +
+      '<div style="font-size:9px;color:var(--t4)">Sign in with this password. You will be asked to set a new one.</div>' +
     '</div>';
   succEl.style.display = 'block';
 
-  // Try email silently in background
-  _sendResetEmail(email, user.displayName, code);
+  // Switch to signin after a delay
+  setTimeout(function() {
+    loginTab('signin');
+    setTimeout(function() {
+      var s = document.getElementById('login-success');
+      s.innerHTML = '✓ Temporary password generated. Sign in with it now.';
+      s.style.display = 'block';
+    }, 50);
+  }, 4000);
 }
 
 function _sendResetEmail(email, name, code) {
@@ -2117,6 +2108,7 @@ function doResetPassword() {
 // ── LOGOUT ──────────────────────────────────────────────────
 function doLogout() {
   currentUser = null;
+  _setJwt(''); // Clear JWT token
   try { sessionStorage.removeItem('np_session'); } catch(e) {}
   _hideTerminal();
   document.getElementById('login-overlay').classList.remove('hidden');
@@ -2135,21 +2127,35 @@ function doLogout() {
 }
 
 // ── AUTH CHECK ──────────────────────────────────────────────
-function checkAuth() {
+async function checkAuth() {
+  // Try to restore session from JWT if no currentUser
+  if (!currentUser && _jwt) {
+    try {
+      var r = await _api('GET', '/api/me');
+      if (r.ok) {
+        currentUser = {
+          email:r.data.email, role:r.data.role, displayName:r.data.display_name,
+          company:r.data.company||'', assignedMerchants:r.data.assigned_merchants||[],
+          tier:r.data.tier||'free', veteran:r.data.veteran||false,
+          loginTime:Date.now(), _version:AUTH_VERSION
+        };
+        if (r.data.must_change_password) {
+          _setForceChangeUser({ email:r.data.email, displayName:r.data.display_name });
+          _hideTerminal();
+          document.getElementById('login-overlay').classList.remove('hidden');
+          loginTab('changepass');
+          return;
+        }
+      } else {
+        _setJwt(''); // Token expired
+      }
+    } catch(e) { _setJwt(''); }
+  }
+
   if (!currentUser) {
     _hideTerminal();
     document.getElementById('login-overlay').classList.remove('hidden');
   } else {
-    // CRITICAL: Check if this user needs to change password (e.g., admin reset it)
-    var freshUser = allUsers.find(function(u) { return u.email === currentUser.email && u.active; });
-    if (freshUser && freshUser.mustChangePassword) {
-      // Force the password change pane — do NOT show terminal
-      _forceChangeUser = freshUser;
-      _hideTerminal();
-      document.getElementById('login-overlay').classList.remove('hidden');
-      loginTab('changepass');
-      return;
-    }
     document.getElementById('login-overlay').classList.add('hidden');
     _showTerminal();
     updateUserUI();
@@ -4607,12 +4613,27 @@ function buildSettingsView() {
 }
 
 // ── USER MANAGEMENT VIEW (Admin Only) ────────────────────────
-function renderUsersView() {
+async function renderUsersView() {
   var el = document.getElementById('users-body');
   if (!el) return;
   if (!canManageUsers()) {
     el.innerHTML = '<div class="empty-state"><span class="es-icon">☷</span>User management requires administrator access</div>';
     return;
+  }
+  // Fetch users from backend API
+  el.innerHTML = '<div style="padding:20px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--t3)">Loading users...</div>';
+  var apiR = await _api('GET', '/api/users');
+  if (apiR.ok) {
+    allUsers = apiR.data.map(function(u) {
+      return {
+        _apiId:u.id, email:u.email, displayName:u.display_name,
+        company:u.company||'', role:u.role, tier:u.tier||'free',
+        veteran:u.veteran||false, active:u.active, verified:u.verified,
+        mustChangePassword:u.must_change_password,
+        assignedMerchants:u.assigned_merchants||[],
+        createdBy:u.created_by||'', createdAt:u.created_at?new Date(u.created_at).getTime():Date.now()
+      };
+    });
   }
   var active = allUsers.filter(function(u){return u.active;});
   var inactive = allUsers.filter(function(u){return !u.active;});
@@ -4733,8 +4754,8 @@ function showOnboardModal(role) {
 function closeOnboard() { document.getElementById('onboard-overlay').classList.remove('open'); }
 
 var _onboardLock = false;
-function doOnboard() {
-  if (_onboardLock) return; // Prevent double-fire from delegation + inline onclick
+async function doOnboard() {
+  if (_onboardLock) return;
   _onboardLock = true;
   setTimeout(function(){ _onboardLock = false; }, 500);
   var errEl = document.getElementById('onboard-error');
@@ -4750,38 +4771,14 @@ function doOnboard() {
   if (!name||!email||!pass) { errEl.textContent='Fill in name, email, and password'; errEl.style.display='block'; return; }
   if (pass.length<8) { errEl.textContent='Password must be at least 8 characters'; errEl.style.display='block'; return; }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { errEl.textContent='Enter a valid email'; errEl.style.display='block'; return; }
-  var exists = allUsers.find(function(u){return u.email.toLowerCase()===email;});
-  if (exists) { errEl.textContent='An account with this email already exists'; errEl.style.display='block'; return; }
 
   var assigned = merchRaw ? merchRaw.split(',').map(function(s){return s.trim();}).filter(Boolean) : [];
 
-  var newUser = {
-    email:email, password:pass, role:role,
-    displayName:name, company:company,
-    assignedMerchants:assigned, active:true,
-    veteran:veteran,
-    verified:true, verifiedBy:currentUser.email,
-    mustChangePassword:true,
-    createdBy:currentUser.email, createdAt:Date.now()
-  };
-  allUsers.push(newUser);
-  var saved = _saveUsers();
-  if (!saved) {
-    // Rollback the push
-    allUsers.pop();
-    errEl.textContent = 'FAILED TO SAVE — localStorage may be full or disabled. User was NOT created.';
-    errEl.style.display = 'block';
-    return;
-  }
-  // Verify persistence by re-reading
-  var checkUsers = _loadUsers();
-  var checkUser = checkUsers.find(function(u){return u.email===email;});
-  if (!checkUser) {
-    errEl.textContent = 'SAVE VERIFICATION FAILED — User was not persisted. Check browser storage settings.';
-    errEl.style.display = 'block';
-    return;
-  }
-  allUsers = checkUsers; // Use verified data going forward
+  var r = await _api('POST', '/api/users/onboard', {
+    name:name, email:email, password:pass, role:role,
+    tier:'free', company:company, veteran:veteran, assigned_merchants:assigned
+  });
+  if (!r.ok) { errEl.textContent = r.error; errEl.style.display = 'block'; return; }
   closeOnboard();
   renderUsersView();
   _updateSidebarForRole();
@@ -4868,23 +4865,18 @@ function deleteUserPermanent(i) {
 
 // ── RESET USER PASSWORD ─────────────────────────────────────
 var _resetLock = false;
-function resetUserPass(i) {
+async function resetUserPass(i) {
   if (_resetLock) return;
   _resetLock = true;
   setTimeout(function(){ _resetLock = false; }, 500);
   if (!canManageUsers()) return;
   var u = allUsers[i]; if (!u) return;
-  var newPass = 'NexusPay' + Math.random().toString(36).substring(2,8) + '!';
-  u.password = newPass;
-  u.mustChangePassword = true;
-  var saved = _saveUsers();
-  if (!saved) { toast('ERROR: Password save failed — localStorage may be full', 'err'); return; }
-  // Verify save by reading back
-  var verify = _loadUsers();
-  var vUser = verify.find(function(x){return x.email === u.email;});
-  if (!vUser || vUser.password !== newPass) { toast('ERROR: Password verification failed — save did not persist', 'err'); return; }
-  allUsers = verify; // Use verified data
-  // Show credential banner with Outlook send button
+  var apiId = u._apiId || u.id || i;
+
+  var r = await _api('POST', '/api/users/' + apiId + '/reset-password');
+  if (!r.ok) { toast('Reset failed: ' + r.error, 'err'); return; }
+
+  var newPass = r.data.temp_password;
   var el = document.getElementById('users-body');
   if (el) {
     var banner = document.createElement('div');
@@ -4893,8 +4885,8 @@ function resetUserPass(i) {
       '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">' +
         '<span style="font-size:20px">🔑</span>' +
         '<div style="flex:1">' +
-          '<div style="font-size:12px;font-weight:700;color:var(--up);margin-bottom:2px">Password Reset — ' + esc(u.displayName) + '</div>' +
-          '<div style="color:var(--t2)">' + esc(u.email) + '</div>' +
+          '<div style="font-size:12px;font-weight:700;color:var(--up);margin-bottom:2px">Password Reset — ' + esc(r.data.display_name || u.displayName) + '</div>' +
+          '<div style="color:var(--t2)">' + esc(r.data.email || u.email) + '</div>' +
         '</div>' +
       '</div>' +
       '<div style="background:var(--s2);border:1px solid var(--b2);border-radius:4px;padding:10px 14px;margin-bottom:10px">' +
@@ -4903,13 +4895,12 @@ function resetUserPass(i) {
         '<div style="font-size:9px;color:var(--warn);margin-top:4px">⚠ User must change this on next login</div>' +
       '</div>' +
       '<div style="display:flex;gap:8px">' +
-        '<button class="btn sm" onclick="_composeResetEmail(\'' + esc(u.email) + '\',\'' + esc(u.displayName) + '\',\'' + esc(newPass) + '\')">📧 Open Email Client</button>' +
-        '<button class="btn sm ghost" onclick="navigator.clipboard.writeText(\'' + esc(newPass) + '\');toast(\'Password copied\',\'ok\')">📋 Copy Password</button>' +
+        '<button class="btn sm ghost" onclick="navigator.clipboard.writeText(\'' + esc(newPass) + '\');toast(\'Password copied\',\'ok\')">📋 Copy</button>' +
         '<button class="btn sm ghost" style="margin-left:auto" onclick="this.closest(\'div[style]\').parentElement.remove()">Dismiss</button>' +
       '</div>';
     el.insertBefore(banner, el.firstChild);
   }
-  toast('Password reset for ' + u.displayName + ' — see credentials above', 'ok');
+  toast('Password reset for ' + (r.data.display_name || u.displayName), 'ok');
 }
 
 // ── ADMIN MANUAL APPROVE ─────────────────────────────────────
@@ -4971,7 +4962,7 @@ function showEditUser(i) {
 function closeEditUser() { document.getElementById('edituser-overlay').classList.remove('open'); }
 
 var _editUserLock = false;
-function doEditUser() {
+async function doEditUser() {
   if (_editUserLock) return;
   _editUserLock = true;
   setTimeout(function(){ _editUserLock = false; }, 500);
@@ -4993,39 +4984,30 @@ function doEditUser() {
   if (dup) { errEl.textContent='Email already used by another account'; errEl.style.display='block'; return; }
   if (newpass && newpass.length<8) { errEl.textContent='Password must be 8+ characters'; errEl.style.display='block'; return; }
 
-  u.displayName = name;
-  u.email = email;
-  u.company = company;
-  u.role = role;
-  u.tier = tier;
-  u.assignedMerchants = merchs ? merchs.split(',').map(function(s){return s.trim();}).filter(Boolean) : [];
-  if (newpass) u.password = newpass;
   var euVetEl = document.getElementById('eu-veteran');
-  u.veteran = euVetEl ? euVetEl.checked : false;
-  u.lastModifiedBy = currentUser.email;
-  u.lastModifiedAt = Date.now();
-  var saved = _saveUsers();
-  if (!saved) { errEl.textContent = 'Error saving — localStorage may be full'; errEl.style.display = 'block'; return; }
-  // Verify save
-  var verify = _loadUsers();
-  if (newpass) {
-    var vUser = verify.find(function(x){return x.email === email;});
-    if (!vUser || vUser.password !== newpass) { errEl.textContent = 'Password save verification failed'; errEl.style.display = 'block'; return; }
-  }
-  allUsers = verify; // Use verified data
+  var veteran = euVetEl ? euVetEl.checked : false;
+  var merchList = merchs ? merchs.split(',').map(function(s){return s.trim();}).filter(Boolean) : [];
+
+  var apiId = u._apiId || u.id || i;
+  var body = { display_name:name, email:email, company:company, role:role, tier:tier, veteran:veteran, assigned_merchants:merchList };
+  if (newpass) body.new_password = newpass;
+
+  var r = await _api('PUT', '/api/users/' + apiId, body);
+  if (!r.ok) { errEl.textContent = r.error; errEl.style.display = 'block'; return; }
   closeEditUser();
   renderUsersView();
   toast('Updated: ' + name + (newpass ? ' (password changed)' : ''), 'ok');
 }
 
-function deleteUserFromEdit() {
+async function deleteUserFromEdit() {
   var i = parseInt(document.getElementById('eu-idx').value);
   var u = allUsers[i]; if (!u) return;
   if (u.email === 'admin@nexuspayservices.com') { toast('Cannot delete primary admin','err'); return; }
   if (u.email === currentUser.email) { toast('Cannot delete your own account','err'); return; }
   var name = u.displayName;
-  allUsers.splice(i,1);
-  _saveUsers();
+  var apiId = u._apiId || u.id || i;
+  var r = await _api('DELETE', '/api/users/' + apiId);
+  if (!r.ok) { toast('Delete failed: ' + r.error, 'err'); return; }
   closeEditUser();
   renderUsersView();
   _updateSidebarForRole();
