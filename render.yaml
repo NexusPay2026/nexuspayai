@@ -1,0 +1,22 @@
+databases:
+  - name: nexuspay-db
+    plan: free
+    databaseName: nexuspay
+    user: nexuspay
+
+services:
+  - type: web
+    name: nexuspay-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: nexuspay-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: PYTHON_VERSION
+        value: "3.11"
