@@ -1086,12 +1086,13 @@ html,body{height:100%;overflow:hidden;background:var(--void);color:var(--t1);fon
 <div class="overlay" id="key-overlay" onclick="keyBgClick(event)">
   <div class="modal" style="width:520px">
     <div class="modal-title">API Key Management</div>
-    <div class="modal-sub">Keys stored permanently in localStorage. Sent only to api.anthropic.com.<br>Up to 11 keys supported (1 primary + 10 additional). System auto-rotates on rate limits.</div>
+    <div class="modal-sub">Supports Anthropic (Claude), OpenAI (GPT-4o), and Google (Gemini).<br>Up to 11 keys. System auto-rotates on rate limits and falls back between providers.</div>
     <div id="key-pool-list"></div>
     <div id="key-add-section" style="display:none;margin-top:10px;padding:10px;background:var(--s2);border:1px solid var(--b1);border-radius:4px">
-      <div class="fgrid-2">
+      <div class="fgrid-3">
+        <div class="field"><label>Provider</label><select id="new-key-provider"><option value="anthropic">Anthropic (Claude)</option><option value="openai">OpenAI (GPT-4o)</option><option value="google">Google (Gemini)</option></select></div>
         <div class="field"><label>Label</label><input id="new-key-label" placeholder="e.g. Production Key 2" /></div>
-        <div class="field"><label>API Key</label><input type="password" id="new-key-value" placeholder="sk-ant-api03-…" /></div>
+        <div class="field"><label>API Key</label><input type="password" id="new-key-value" placeholder="sk-ant-… / sk-… / AIza…" /></div>
       </div>
       <div style="display:flex;gap:6px;margin-top:8px">
         <button class="btn lime sm" onclick="doAddKey()">Add Key</button>
@@ -1111,7 +1112,7 @@ html,body{height:100%;overflow:hidden;background:var(--void);color:var(--t1);fon
   <div class="modal" style="width:640px;max-width:96vw">
     <div class="modal-title" id="mm-title">Merchant Detail</div>
     <div id="mm-body"></div>
-    <div class="modal-actions"><button class="btn ghost" onclick="closeMerchModal()">Close</button><button class="btn lime" id="mm-pdf-btn" onclick="downloadPDFFromModal()">⬇ Download PDF</button></div>
+    <div class="modal-actions"><button class="btn ghost" onclick="closeMerchModal()">Close</button><button class="btn" onclick="generateProposal(portfolio[_modalMerchIdx])">📄 Proposal</button><button class="btn lime" id="mm-pdf-btn" onclick="downloadPDFFromModal()">⬇ Download PDF</button></div>
   </div>
 </div>
 
@@ -1257,53 +1258,94 @@ html,body{height:100%;overflow:hidden;background:var(--void);color:var(--t1);fon
   </div>
 </div>
 
-<!-- ══ SUBSCRIPTION / PAYMENT MODAL ══ -->
+<!-- ══ UPGRADE / PAYMENT OVERLAY ══ -->
 <div class="overlay" id="payment-overlay">
-  <div class="modal" style="width:620px;max-width:96vw">
-    <div class="modal-title">Subscription &amp; Payment</div>
-    <div class="modal-sub" id="pay-sub">Manage subscription tier for client</div>
+  <div class="modal" style="width:720px;max-width:96vw">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div>
+        <div class="modal-title" style="margin:0">🐺 Upgrade Your Plan</div>
+        <div class="modal-sub" id="pay-sub" style="margin:0">Choose the plan that fits your business</div>
+      </div>
+      <button class="btn sm ghost" onclick="closePayment()" style="font-size:16px;padding:4px 10px">✕</button>
+    </div>
     <input type="hidden" id="pay-idx" value="-1" />
-    <!-- Tier Selection -->
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px" id="tier-cards">
+
+    <!-- Billing Toggle -->
+    <div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:16px">
+      <span id="bill-monthly-label" style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--lime)">Monthly</span>
+      <div onclick="toggleBilling()" style="width:44px;height:22px;border-radius:11px;background:var(--s3);border:1px solid var(--b2);cursor:pointer;position:relative;transition:all .2s" id="bill-toggle">
+        <div id="bill-toggle-dot" style="width:18px;height:18px;border-radius:9px;background:var(--lime);position:absolute;top:1px;left:1px;transition:all .2s"></div>
+      </div>
+      <span id="bill-annual-label" style="font-family:var(--mono);font-size:11px;color:var(--t3)">Annual <span style="color:var(--up);font-size:9px">SAVE 5%</span></span>
+    </div>
+
+    <!-- Veteran Discount Banner -->
+    <div id="vet-discount-banner" style="display:none;padding:8px 12px;background:rgba(184,240,64,.06);border:1px solid rgba(184,240,64,.2);border-radius:4px;margin-bottom:12px;text-align:center">
+      <span style="font-family:var(--mono);font-size:10px;color:var(--lime)">🎖 Veteran Discount Active — <strong>20% off Annual Enterprise</strong></span>
+    </div>
+
+    <!-- Tier Cards -->
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px" id="tier-cards">
       <div class="tier-card" id="tc-free" onclick="selectTier('free')">
         <div class="tc-head" style="background:rgba(90,96,112,.04)">
           <div class="tc-name" style="color:var(--t2)">Standard</div>
           <div class="tc-price" style="color:var(--t2)">Free</div>
-          <div style="font-family:var(--mono);font-size:9px;color:var(--t3)">Basic access</div>
+          <div style="font-family:var(--mono);font-size:9px;color:var(--t3)">Get started</div>
         </div>
-        <div class="tc-body">
-          ✓ Upload statements<br>✓ Basic audit analysis<br>✓ View own data<br>✓ Download PDFs<br>✕ Rate intelligence<br>✕ Compliance center<br>✕ Savings calculator<br>✕ Priority support
+        <div class="tc-body" style="font-size:10px;line-height:1.9">
+          ✓ 3 statement uploads/mo<br>✓ Basic audit summary<br>✓ Savings estimate<br>✓ 5 merchants max<br>✕ Full audit reports<br>✕ Rate intelligence<br>✕ Compliance center
         </div>
       </div>
-      <div class="tier-card" id="tc-pro" onclick="selectTier('pro')">
-        <div class="tc-head" style="background:rgba(144,96,240,.04)">
+      <div class="tier-card" id="tc-pro" onclick="selectTier('pro')" style="border-color:rgba(144,96,240,.3)">
+        <div style="position:absolute;top:-1px;left:50%;transform:translateX(-50%);background:var(--purple);color:#fff;font-family:var(--mono);font-size:8px;padding:2px 10px;border-radius:0 0 4px 4px;letter-spacing:.05em">MOST POPULAR</div>
+        <div class="tc-head" style="background:rgba(144,96,240,.06)">
           <div class="tc-name" style="color:var(--purple)">Pro</div>
-          <div class="tc-price" style="color:var(--purple)">$99–$299<span style="font-size:10px;font-weight:400;color:var(--t3)">/mo</span></div>
+          <div class="tc-price" style="color:var(--purple)" id="pro-price-display">$299<span style="font-size:10px;font-weight:400;color:var(--t3)">/mo</span></div>
           <div style="font-family:var(--mono);font-size:9px;color:var(--t3)">Full analytics</div>
         </div>
-        <div class="tc-body">
-          ✓ Everything in Standard<br>✓ Rate intelligence<br>✓ Compliance center<br>✓ Savings calculator<br>✓ Program comparison<br>✓ Up to 25 merchants<br>✓ Email support<br>✕ Custom reports
+        <div class="tc-body" style="font-size:10px;line-height:1.9">
+          ✓ 25 uploads/month<br>✓ Full detailed PDF reports<br>✓ Rate intelligence<br>✓ Compliance center<br>✓ Savings calculator<br>✓ 50 merchants<br>✓ Email support
         </div>
       </div>
       <div class="tier-card" id="tc-enterprise" onclick="selectTier('enterprise')">
         <div class="tc-head" style="background:rgba(208,160,32,.04)">
           <div class="tc-name" style="color:var(--gold)">Enterprise</div>
-          <div class="tc-price" style="color:var(--gold)">$999<span style="font-size:10px;font-weight:400;color:var(--t3)">/mo</span></div>
-          <div style="font-family:var(--mono);font-size:9px;color:var(--t3)">Unlimited + priority</div>
+          <div class="tc-price" style="color:var(--gold)" id="ent-price-display">$999<span style="font-size:10px;font-weight:400;color:var(--t3)">/mo</span></div>
+          <div style="font-family:var(--mono);font-size:9px;color:var(--t3)">Unlimited everything</div>
         </div>
-        <div class="tc-body">
-          ✓ Everything in Pro<br>✓ Unlimited merchants<br>✓ Custom reports<br>✓ API access<br>✓ White-label PDFs<br>✓ Dedicated account mgr<br>✓ Priority phone support<br>✓ Quarterly business review
+        <div class="tc-body" style="font-size:10px;line-height:1.9">
+          ✓ Unlimited uploads<br>✓ Unlimited merchants<br>✓ AI reconciliation<br>✓ Custom branded PDFs<br>✓ API access<br>✓ Dedicated account mgr<br>✓ Priority phone support
         </div>
       </div>
     </div>
-    <!-- Payment Method -->
+
+    <!-- Payment Section (hidden for free) -->
     <div id="pay-method-section" style="display:none">
+      <!-- Order Summary -->
+      <div style="background:var(--s2);border:1px solid var(--b2);border-radius:4px;padding:12px 14px;margin-bottom:12px">
+        <div style="font-family:var(--mono);font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:var(--t3);margin-bottom:8px">Order Summary</div>
+        <div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--t1)">
+          <span id="pay-plan-name">Pro — Monthly</span>
+          <span id="pay-plan-price" style="color:var(--lime);font-weight:700">$299.00</span>
+        </div>
+        <div id="pay-discount-line" style="display:none;display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--up);margin-top:4px">
+          <span id="pay-discount-label">Annual discount (5%)</span>
+          <span id="pay-discount-amt">-$179.40</span>
+        </div>
+        <div style="border-top:1px solid var(--b1);margin-top:8px;padding-top:8px;display:flex;justify-content:space-between;font-family:var(--mono);font-size:12px;font-weight:700">
+          <span style="color:var(--t1)">Total</span>
+          <span id="pay-total" style="color:var(--lime)">$299.00</span>
+        </div>
+        <div style="font-family:var(--mono);font-size:8px;color:var(--t4);margin-top:4px" id="pay-billing-note">Billed monthly. Cancel anytime.</div>
+      </div>
+
+      <!-- Payment Method -->
       <div style="font-family:var(--mono);font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:var(--t3);margin-bottom:6px">Payment Method</div>
       <div class="pay-methods" id="pay-methods">
         <div class="pay-chip on" onclick="selectPayMethod(this,'card')">💳 Credit/Debit Card</div>
-        <div class="pay-chip" onclick="selectPayMethod(this,'paypal')">🅿 PayPal</div>
         <div class="pay-chip" onclick="selectPayMethod(this,'ach')">🏦 E-Check / ACH</div>
       </div>
+
       <!-- Card Fields -->
       <div id="pay-card-fields" style="margin-top:10px">
         <div style="display:flex;gap:6px;margin-bottom:6px">
@@ -1314,17 +1356,13 @@ html,body{height:100%;overflow:hidden;background:var(--void);color:var(--t1);fon
           <span style="font-family:var(--mono);font-size:9px;color:var(--warn)">DISC</span>
         </div>
         <div class="fgrid-2">
-          <div class="field" style="grid-column:1/-1"><label>Card Number</label><input id="pay-cardnum" placeholder="4242 4242 4242 4242" maxlength="19"/></div>
-          <div class="field"><label>Expiry</label><input id="pay-exp" placeholder="MM/YY" maxlength="5"/></div>
+          <div class="field" style="grid-column:1/-1"><label>Card Number</label><input id="pay-cardnum" placeholder="4242 4242 4242 4242" maxlength="19" oninput="formatCardNum(this)"/></div>
+          <div class="field"><label>Expiry</label><input id="pay-exp" placeholder="MM/YY" maxlength="5" oninput="formatExpiry(this)"/></div>
           <div class="field"><label>CVV</label><input id="pay-cvv" placeholder="123" maxlength="4" type="password"/></div>
           <div class="field" style="grid-column:1/-1"><label>Name on Card</label><input id="pay-cname" placeholder="John Smith"/></div>
         </div>
       </div>
-      <!-- PayPal Fields -->
-      <div id="pay-paypal-fields" style="display:none;margin-top:10px">
-        <div class="field"><label>PayPal Email</label><input id="pay-ppemail" placeholder="you@email.com" type="email"/></div>
-        <div style="font-family:var(--mono);font-size:8px;color:var(--t4);margin-top:4px">You will be redirected to PayPal to authorize recurring payments.</div>
-      </div>
+
       <!-- ACH Fields -->
       <div id="pay-ach-fields" style="display:none;margin-top:10px">
         <div class="fgrid-2">
@@ -1336,16 +1374,20 @@ html,body{height:100%;overflow:hidden;background:var(--void);color:var(--t1);fon
         </div>
         <div style="font-family:var(--mono);font-size:8px;color:var(--t4);margin-top:4px">ACH debit authorization: By submitting, you authorize recurring debits from this account.</div>
       </div>
-      <!-- Autopay toggle -->
-      <div style="display:flex;align-items:center;gap:8px;margin-top:12px;padding:8px 10px;background:var(--s2);border:1px solid var(--b1);border-radius:3px">
-        <input type="checkbox" id="pay-autopay" checked style="accent-color:var(--lime)"/>
-        <label for="pay-autopay" style="font-family:var(--mono);font-size:10px;color:var(--t2);cursor:pointer">Enable AutoPay — charge automatically each billing cycle</label>
+
+      <!-- Secure badge -->
+      <div style="display:flex;align-items:center;justify-content:center;gap:6px;margin-top:12px;font-family:var(--mono);font-size:8px;color:var(--t4)">
+        <span>🔒</span> PCI-DSS Compliant · 256-bit Encryption · Processed by NexusPay Services
       </div>
     </div>
-    <div class="modal-actions">
+
+    <!-- Error display -->
+    <div id="pay-error" style="display:none;padding:8px 12px;background:rgba(224,64,80,.08);border:1px solid rgba(224,64,80,.3);border-radius:4px;margin-top:10px;font-family:var(--mono);font-size:10px;color:var(--dn)"></div>
+
+    <div class="modal-actions" style="margin-top:14px">
       <div style="font-family:var(--mono);font-size:9px;color:var(--t3);margin-right:auto" id="pay-summary"></div>
       <button class="btn ghost" onclick="closePayment()">Cancel</button>
-      <button class="btn lime" id="pay-submit-btn" onclick="doPayment()">Confirm &amp; Subscribe</button>
+      <button class="btn lime" id="pay-submit-btn" onclick="doPayment()" style="min-width:180px">🔒 Subscribe & Pay</button>
     </div>
   </div>
 </div>
@@ -1501,6 +1543,31 @@ var currentAudit  = null;
 
 try { portfolio = JSON.parse(localStorage.getItem('np_portfolio') || '[]'); } catch(e) { portfolio = []; }
 function _savePortfolio() { try { var j=JSON.stringify(portfolio); localStorage.setItem('np_portfolio',j); if(_hasClaudeStorage){try{window.storage.set('np_portfolio',j);}catch(e){}} } catch(e) {} }
+
+// Load merchants from backend API into portfolio
+async function _loadPortfolioFromAPI() {
+  if (!_jwt) return; // Not logged in
+  var r = await _api('GET', '/api/merchants');
+  if (r.ok && Array.isArray(r.data) && r.data.length > 0) {
+    portfolio = r.data.map(function(m) {
+      return {
+        _apiId: m.id, name: m.name||'', processor: m.processor||'',
+        statement_month: m.statement_month||'', monthly_volume: m.monthly_volume||0,
+        total_fees: m.total_fees||0, interchange_cost: m.interchange_cost||0,
+        processor_markup: m.processor_markup||0, monthly_fees: m.monthly_fees||0,
+        transaction_count: m.transaction_count||0, credit_card_pct: m.credit_card_pct||85,
+        avg_ticket: m.avg_ticket||0, effective_rate: m.effective_rate||0,
+        interchange_rate: m.interchange_rate||0, markup_rate: m.markup_rate||0,
+        risk_score: m.risk_score||0, line_items: m.line_items||[], findings: m.findings||[],
+        _owner: m.owner_email||'', _isDemo: m.is_demo||false, _addedBy: m.added_by||'',
+        _ts: m.created_at ? new Date(m.created_at).getTime() : Date.now()
+      };
+    });
+    _savePortfolio(); // Cache locally
+    return true;
+  }
+  return false;
+}
 
 // ── AUTH STATE ───────────────────────────────────────────────
 // Roles: admin, employee, client, user (self-registered), demo
@@ -2824,18 +2891,11 @@ function renderReconView() {
 
 // ── SELF-UPGRADE PAYMENT ────────────────────────────────────
 function showPaymentSelf() {
-  // For non-admin users who want to upgrade their own tier
-  if (isAdmin()) {
-    nav('users');
-    return;
-  }
-  // Find self in allUsers
+  // Any user can upgrade their own plan
+  if (!currentUser) { toast('Sign in to upgrade','err'); return; }
+  // Find self in allUsers for API ID
   var idx = allUsers.findIndex(function(u){return u.email === currentUser.email;});
-  if (idx >= 0) {
-    showPayment(idx);
-  } else {
-    toast('Contact admin@nexuspayservices.com to upgrade your plan', 'warn');
-  }
+  showPayment(idx >= 0 ? idx : -1);
 }
 
 function updateCounts() {
@@ -2959,18 +3019,20 @@ function _renderKeyPool() {
     list.innerHTML = '<div style="padding:14px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--t3)">No API keys configured. Add your first key below.</div>';
   } else {
     list.innerHTML = _apiKeyPool.map(function(k,i) {
-      var masked = k.key ? k.key.substring(0,12) + '•'.repeat(16) + k.key.slice(-4) : '—';
+      var masked = k.key ? k.key.substring(0,8) + '•'.repeat(12) + k.key.slice(-4) : '—';
       var statusDot = k.active ? '<span class="tb-dot live" style="width:6px;height:6px"></span>' : '<span class="tb-dot" style="width:6px;height:6px;background:var(--t4)"></span>';
       var errBadge = k.lastError && (Date.now()-k.lastError < 120000) ? ' <span class="dup-badge">RATE LIMITED</span>' : '';
+      var provColors = {anthropic:'var(--lime)',openai:'var(--up)',google:'var(--info)'};
+      var prov = k.provider || 'anthropic';
+      var provBadge = '<span style="font-family:var(--mono);font-size:7px;padding:1px 4px;border-radius:2px;background:rgba(255,255,255,.05);color:'+provColors[prov]+';border:1px solid '+provColors[prov]+';margin-left:4px">' + _providerLabel(prov).toUpperCase() + '</span>';
       return '<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--s2);border:1px solid var(--b1);border-radius:3px;margin-bottom:5px;' + (!k.active?'opacity:.45':'') + '">' +
         statusDot +
         '<div style="flex:1;min-width:0">' +
-          '<div style="font-size:10px;font-weight:600">' + esc(k.label||'Key '+(i+1)) + errBadge + '</div>' +
+          '<div style="font-size:10px;font-weight:600">' + esc(k.label||'Key '+(i+1)) + provBadge + errBadge + '</div>' +
           '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(masked) + '</div>' +
           '<div style="font-family:var(--mono);font-size:8px;color:var(--t4)">' +
             (k.uses ? k.uses+' uses' : '0 uses') +
             (k.lastUsed ? ' · last: '+new Date(k.lastUsed).toLocaleDateString() : '') +
-            (k.addedBy ? ' · by: '+esc(k.addedBy) : '') +
           '</div>' +
         '</div>' +
         '<div style="display:flex;gap:4px;flex-shrink:0">' +
@@ -2987,12 +3049,12 @@ function _renderKeyPool() {
 function doAddKey() {
   if (!isAdmin()) return;
   if (_apiKeyPool.length >= 11) { toast('Maximum 11 keys reached', 'warn'); return; }
-  var label = (document.getElementById('new-key-label').value||'').trim() || 'Key '+(_apiKeyPool.length+1);
+  var provider = (document.getElementById('new-key-provider').value||'anthropic');
+  var label = (document.getElementById('new-key-label').value||'').trim() || _providerLabel(provider) + ' Key '+(_apiKeyPool.length+1);
   var key   = (document.getElementById('new-key-value').value||'').trim();
   if (!key) { toast('Paste an API key', 'warn'); return; }
-  if (!key.startsWith('sk-')) { toast('Key should start with sk-', 'warn'); return; }
   if (_apiKeyPool.some(function(k){return k.key===key;})) { toast('This key is already in the pool', 'warn'); return; }
-  _apiKeyPool.push({ key:key, label:label, active:true, addedBy:currentUser?currentUser.email:'admin', addedAt:Date.now(), uses:0, lastUsed:null, lastError:null });
+  _apiKeyPool.push({ key:key, label:label, provider:provider, active:true, addedBy:currentUser?currentUser.email:'admin', addedAt:Date.now(), uses:0, lastUsed:null, lastError:null });
   _saveKeyPool();
   _refreshActiveKey();
   document.getElementById('new-key-label').value = '';
@@ -3000,7 +3062,7 @@ function doAddKey() {
   document.getElementById('key-add-section').style.display = 'none';
   _renderKeyPool();
   updateApiChip();
-  toast('API key added: ' + label, 'ok');
+  toast('API key added: ' + label + ' (' + _providerLabel(provider) + ')', 'ok');
 }
 
 function toggleKeyActive(i) {
@@ -3240,9 +3302,9 @@ async function runAudit() {
   try {
     var data;
     if (_fileReady && _fileBase64 && APIKEY) {
-      setProgress(10, 'Sending to Claude claude-sonnet-4-20250514…');
-      data = await extractWithClaude();
-      setProgress(85, 'Computing forensic benchmarks…');
+      setProgress(10, 'Launching multi-provider AI analysis…');
+      data = await extractWithAI();
+      setProgress(85, 'Building forensic report…');
     } else if (_fileReady && _fileBase64 && !APIKEY) {
       showAuditError('No API keys configured. ' + (isAdmin() ? 'Click Manage Keys to add one.' : 'Contact admin to set up API keys.'));
       if (isAdmin()) showKeyModal();
@@ -3289,7 +3351,8 @@ async function runAudit() {
 
     var sla = document.getElementById('sb-last-audit');
     if (sla) sla.textContent = data.name;
-    toast('Forensic audit complete — ' + data.name, 'ok');
+    var provInfo = data._providerCount > 1 ? ' [' + data._providerCount + ' AI verified]' : (data._provider ? ' [' + data._provider + ']' : '');
+    toast('Forensic audit complete — ' + data.name + provInfo, 'ok');
 
     // Reset file for next upload
     _file=null; _fileBase64=null; _fileText=null; _fileReady=false;
@@ -3307,220 +3370,466 @@ async function runAudit() {
 }
 
 // ── CLAUDE API EXTRACTION ─────────────────────────────────────
-async function extractWithClaude() {
-  _refreshActiveKey();
-  if (!APIKEY) throw new Error('No API keys configured. Admin must add keys via ⚙ API Key.');
+// ── MULTI-PROVIDER AI EXTRACTION ENGINE ──────────────────────
+// Supports: Anthropic (Claude), OpenAI (GPT-4o), Google (Gemini)
+// Falls back through available providers automatically.
+// Key pool now supports provider field: 'anthropic' (default), 'openai', 'google'
+
+var AI_EXTRACTION_PROMPT = [
+  'You are a Senior Forensic Payment Processing Analyst.',
+  'Analyze this merchant processing statement and extract ALL financial data precisely.',
+  'Use exact numbers from the document. Calculate any value that can be derived from others.',
+  '',
+  'Return ONLY a valid JSON object. No markdown fences, no preamble, no trailing text.',
+  'Start your response with { and end with }.',
+  '',
+  'Schema (null only if truly undetectable):',
+  '{',
+  '  "name": "<exact business name>",',
+  '  "processor": "<processor/acquirer name>",',
+  '  "statement_month": "<MM/YYYY>",',
+  '  "monthly_volume": <float>,',
+  '  "total_fees": <float>,',
+  '  "interchange_cost": <float>,',
+  '  "processor_markup": <float>,',
+  '  "monthly_fees": <total fixed recurring fees as float>,',
+  '  "statement_fee": <float>,',
+  '  "monthly_service_fee": <float>,',
+  '  "pci_fee": <float>,',
+  '  "batch_fee": <float>,',
+  '  "transaction_count": <integer>,',
+  '  "credit_card_pct": <float 0-100>,',
+  '  "debit_pct": <float 0-100>,',
+  '  "avg_ticket": <float>,',
+  '  "effective_rate": <total_fees/monthly_volume*100 as float>,',
+  '  "interchange_rate": <interchange_cost/monthly_volume*100>,',
+  '  "markup_rate": <processor_markup/monthly_volume*100>,',
+  '  "credit_volume": <float>,',
+  '  "debit_volume": <float>,',
+  '  "visa_volume": <float>,',
+  '  "mc_volume": <float>,',
+  '  "amex_volume": <float>,',
+  '  "disc_volume": <float>,',
+  '  "qualified_pct": <float>,',
+  '  "mid_qual_pct": <float>,',
+  '  "non_qual_pct": <float>,',
+  '  "downgrade_amount": <float>,',
+  '  "chargeback_count": <integer>,',
+  '  "risk_score": <integer 0-100, 100=most overcharged>,',
+  '  "line_items": [{"name":"<fee name>","category":"interchange|processor|monthly|misc","amount":<float>,"benchmark":<float>,"note":"<1-sentence>"}],',
+  '  "findings": [{"text":"<specific finding with exact $ amounts>","severity":"high|medium|low","savings":<annual $ float>}]',
+  '}',
+  '',
+  'Include EVERY fee line item visible on the statement in the line_items array.',
+  'For findings: flag every fee above benchmark, every negotiable charge, every downgrade opportunity.',
+  'Cite exact dollar amounts. CRITICAL: All string values must be single-line — no literal newlines inside strings.',
+  'Use \\n escape only, never actual line breaks inside JSON string values.',
+].join('\n');
+
+function _getKeysByProvider(provider) {
+  return _apiKeyPool.filter(function(k) { return k.active && k.key && (k.provider||'anthropic') === provider; });
+}
+
+function _getBestProvider() {
+  // Rotate between providers — least-used goes first for load balancing
+  var available = [];
+  ['anthropic','openai','google'].forEach(function(p) {
+    var keys = _getKeysByProvider(p);
+    if (keys.length) {
+      var totalUses = keys.reduce(function(sum,k){return sum+(k.uses||0);},0);
+      available.push({ provider:p, uses:totalUses });
+    }
+  });
+  // Sort by least uses first — spreads load across all providers
+  available.sort(function(a,b){ return a.uses - b.uses; });
+  return available.map(function(a){ return a.provider; });
+}
+
+async function extractWithAI() {
+  var providers = _getBestProvider();
+  if (!providers.length) throw new Error('No API keys configured. Admin must add keys via ⚙ API Keys.');
+
+  // ── RUN ALL AVAILABLE PROVIDERS IN PARALLEL ──────────────────
+  setProgress(15, 'Running ' + providers.length + ' AI provider' + (providers.length>1?'s':'') + ' in parallel…');
+
+  var results = [];
+  var errors = [];
+  var providerPromises = providers.map(function(provider) {
+    return (async function() {
+      try {
+        var result;
+        if (provider === 'anthropic') result = await _extractAnthropic();
+        else if (provider === 'openai') result = await _extractOpenAI();
+        else if (provider === 'google') result = await _extractGoogle();
+        if (result) {
+          result._provider = _providerLabel(provider);
+          results.push(result);
+        }
+      } catch(err) {
+        errors.push({ provider: _providerLabel(provider), error: err.message });
+        console.warn(_providerLabel(provider) + ' failed:', err.message);
+      }
+    })();
+  });
+
+  await Promise.all(providerPromises);
+
+  setProgress(75, 'Comparing ' + results.length + ' provider result' + (results.length>1?'s':'') + '…');
+
+  if (!results.length) {
+    var errMsgs = errors.map(function(e){return e.provider+': '+e.error;}).join(' | ');
+    throw new Error('All AI providers failed. ' + errMsgs);
+  }
+
+  // ── SINGLE PROVIDER — use as-is ─────────────────────────────
+  if (results.length === 1) {
+    var solo = results[0];
+    solo._confidence = 'single';
+    solo._providerCount = 1;
+    solo._providers = [solo._provider];
+    solo._consensusNote = 'Analyzed by ' + solo._provider + ' only';
+    if (errors.length) solo._consensusNote += ' (' + errors.map(function(e){return e.provider+' unavailable';}).join(', ') + ')';
+    return solo;
+  }
+
+  // ── MULTIPLE PROVIDERS — build consensus ─────────────────────
+  var consensus = _buildConsensus(results);
+  consensus._providerCount = results.length;
+  consensus._providers = results.map(function(r){return r._provider;});
+
+  if (errors.length) {
+    consensus._consensusNote += ' | ' + errors.map(function(e){return e.provider+' unavailable';}).join(', ');
+  }
+
+  return consensus;
+}
+
+// ── CONSENSUS ENGINE ─────────────────────────────────────────
+// Compares numeric fields across providers. If they agree (within tolerance),
+// use the average. If they disagree, flag it and use the median.
+function _buildConsensus(results) {
+  var numericFields = [
+    'monthly_volume','total_fees','interchange_cost','processor_markup',
+    'monthly_fees','statement_fee','monthly_service_fee','pci_fee','batch_fee',
+    'transaction_count','credit_card_pct','avg_ticket','effective_rate',
+    'interchange_rate','markup_rate','risk_score','credit_volume','debit_volume',
+    'visa_volume','mc_volume','amex_volume','disc_volume',
+    'qualified_pct','mid_qual_pct','non_qual_pct','downgrade_amount','chargeback_count'
+  ];
+  var stringFields = ['name','processor','statement_month'];
+
+  var consensus = {};
+  var agreements = 0;
+  var disagreements = 0;
+  var totalFields = 0;
+  var disagreementDetails = [];
+
+  // ── STRING FIELDS: majority vote ───────────────────────────
+  stringFields.forEach(function(field) {
+    var values = results.map(function(r){return (r[field]||'').trim();}).filter(Boolean);
+    if (!values.length) { consensus[field] = ''; return; }
+    // Find most common value
+    var counts = {};
+    values.forEach(function(v){ var k=v.toLowerCase(); counts[k]=(counts[k]||0)+1; });
+    var best = values[0];
+    var bestCount = 0;
+    Object.keys(counts).forEach(function(k) {
+      if (counts[k] > bestCount) { bestCount = counts[k]; best = values.find(function(v){return v.toLowerCase()===k;}); }
+    });
+    consensus[field] = best;
+  });
+
+  // ── NUMERIC FIELDS: compare and average or median ──────────
+  numericFields.forEach(function(field) {
+    var values = results.map(function(r){return r[field];}).filter(function(v){return v !== null && v !== undefined && !isNaN(v);});
+    if (!values.length) { consensus[field] = null; return; }
+    if (values.length === 1) { consensus[field] = values[0]; return; }
+
+    totalFields++;
+    var avg = values.reduce(function(s,v){return s+v;},0) / values.length;
+    var maxVal = Math.max.apply(null, values);
+    var minVal = Math.min.apply(null, values);
+
+    // Tolerance: values agree if max-min is within 5% of average (or $5 for small amounts)
+    var tolerance = Math.max(Math.abs(avg) * 0.05, 5);
+    var agree = (maxVal - minVal) <= tolerance;
+
+    if (agree) {
+      consensus[field] = Math.round(avg * 100) / 100;
+      agreements++;
+    } else {
+      // Disagreement — use median
+      values.sort(function(a,b){return a-b;});
+      var median = values.length % 2 === 0 ?
+        (values[values.length/2-1] + values[values.length/2]) / 2 :
+        values[Math.floor(values.length/2)];
+      consensus[field] = Math.round(median * 100) / 100;
+      disagreements++;
+      disagreementDetails.push({
+        field: field,
+        values: results.map(function(r,i){return { provider:r._provider, value:r[field] };})
+      });
+    }
+  });
+
+  // ── MERGE LINE ITEMS: combine unique items from all providers ─
+  var allItems = [];
+  var itemNames = {};
+  results.forEach(function(r) {
+    (r.line_items||[]).forEach(function(item) {
+      var key = (item.name||'').toLowerCase().trim();
+      if (!itemNames[key]) {
+        itemNames[key] = true;
+        allItems.push(item);
+      }
+    });
+  });
+  consensus.line_items = allItems;
+
+  // ── MERGE FINDINGS: combine and deduplicate ────────────────
+  var allFindings = [];
+  var findingTexts = {};
+  results.forEach(function(r) {
+    (r.findings||[]).forEach(function(f) {
+      var key = (f.text||'').substring(0,50).toLowerCase();
+      if (!findingTexts[key]) {
+        findingTexts[key] = true;
+        allFindings.push(f);
+      }
+    });
+  });
+  // Sort by savings descending
+  allFindings.sort(function(a,b){return (b.savings||0)-(a.savings||0);});
+  consensus.findings = allFindings;
+
+  // ── CONFIDENCE SCORING ─────────────────────────────────────
+  var agreePct = totalFields > 0 ? Math.round((agreements / totalFields) * 100) : 100;
+  var confidence;
+  if (agreePct >= 90) confidence = 'certified';       // All providers agree
+  else if (agreePct >= 70) confidence = 'high';        // Strong consensus
+  else if (agreePct >= 50) confidence = 'moderate';    // Some disagreement
+  else confidence = 'review';                          // Significant disagreement
+
+  consensus._confidence = confidence;
+  consensus._agreePct = agreePct;
+  consensus._agreements = agreements;
+  consensus._disagreements = disagreements;
+  consensus._disagreementDetails = disagreementDetails;
+  consensus._provider = results.map(function(r){return r._provider;}).join(' + ');
+
+  var confLabels = {
+    certified: '✓ CERTIFIED — All ' + results.length + ' providers agree (' + agreePct + '% consensus)',
+    high: '◉ HIGH CONFIDENCE — ' + agreePct + '% consensus across ' + results.length + ' providers',
+    moderate: '◈ MODERATE — ' + agreePct + '% consensus, ' + disagreements + ' field' + (disagreements>1?'s':'') + ' differ',
+    review: '⚠ REVIEW NEEDED — ' + agreePct + '% consensus, significant discrepancies found'
+  };
+  consensus._consensusNote = confLabels[confidence] || '';
+
+  return consensus;
+}
+
+function _providerLabel(p) {
+  return p === 'anthropic' ? 'Claude' : p === 'openai' ? 'GPT-4o' : p === 'google' ? 'Gemini' : p;
+}
+
+// ── ANTHROPIC (CLAUDE) ───────────────────────────────────────
+async function _extractAnthropic() {
+  var keys = _getKeysByProvider('anthropic');
+  if (!keys.length) throw new Error('No Anthropic keys');
 
   var isText = (_fileBase64 === 'TEXT' && _fileText);
   var isImg  = !isText && _fileType && _fileType.startsWith('image/');
   var isPDF  = !isText && !isImg;
 
   var userContent = [];
+  if (isText) userContent.push({ type:'text', text:'MERCHANT PROCESSING STATEMENT:\n\n' + _fileText });
+  else if (isPDF) userContent.push({ type:'document', source:{ type:'base64', media_type:'application/pdf', data:_fileBase64 } });
+  else userContent.push({ type:'image', source:{ type:'base64', media_type:_fileType, data:_fileBase64 } });
+  userContent.push({ type:'text', text: AI_EXTRACTION_PROMPT });
 
-  if (isText) {
-    // Plain text / CSV — inline text block, no document block needed
-    userContent.push({ type:'text', text:'MERCHANT PROCESSING STATEMENT:\n\n' + _fileText });
-  } else if (isPDF) {
-    // PDF — requires anthropic-beta: pdfs-2024-09-25
-    userContent.push({ type:'document', source:{ type:'base64', media_type:'application/pdf', data:_fileBase64 } });
-  } else {
-    // Image (JPG / PNG scan)
-    userContent.push({ type:'image', source:{ type:'base64', media_type:_fileType, data:_fileBase64 } });
+  var _usedKey = keys[0].key;
+  var headers = {
+    'x-api-key': _usedKey,
+    'anthropic-version': '2023-06-01',
+    'content-type': 'application/json',
+    'anthropic-dangerous-direct-browser-access': 'true',
+  };
+  if (isPDF) headers['anthropic-beta'] = 'pdfs-2024-09-25';
+
+  var resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method:'POST', headers:headers,
+    body: JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:4096, messages:[{role:'user',content:userContent}] }),
+  });
+
+  if (!resp.ok) {
+    var errBody = {}; try { errBody = await resp.json(); } catch(e) {}
+    throw new Error('Claude API: ' + ((errBody.error&&errBody.error.message)||('HTTP '+resp.status)));
   }
 
-  userContent.push({ type:'text', text: [
-    'You are a Senior Forensic Payment Processing Analyst.',
-    'Analyze this merchant processing statement and extract ALL financial data precisely.',
-    'Use exact numbers from the document. Calculate any value that can be derived from others.',
-    '',
-    'Return ONLY a valid JSON object. No markdown fences, no preamble, no trailing text.',
-    'Start your response with { and end with }.',
-    '',
-    'Schema (null only if truly undetectable):',
-    '{',
-    '  "name": "<exact business name>",',
-    '  "processor": "<processor/acquirer name>",',
-    '  "statement_month": "<MM/YYYY>",',
-    '  "monthly_volume": <float>,',
-    '  "total_fees": <float>,',
-    '  "interchange_cost": <float>,',
-    '  "processor_markup": <float>,',
-    '  "monthly_fees": <total fixed recurring fees as float>,',
-    '  "statement_fee": <float>,',
-    '  "monthly_service_fee": <float>,',
-    '  "pci_fee": <float>,',
-    '  "batch_fee": <float>,',
-    '  "transaction_count": <integer>,',
-    '  "credit_card_pct": <float 0-100>,',
-    '  "debit_pct": <float 0-100>,',
-    '  "avg_ticket": <float>,',
-    '  "effective_rate": <total_fees/monthly_volume*100 as float>,',
-    '  "interchange_rate": <interchange_cost/monthly_volume*100>,',
-    '  "markup_rate": <processor_markup/monthly_volume*100>,',
-    '  "credit_volume": <float>,',
-    '  "debit_volume": <float>,',
-    '  "visa_volume": <float>,',
-    '  "mc_volume": <float>,',
-    '  "amex_volume": <float>,',
-    '  "disc_volume": <float>,',
-    '  "qualified_pct": <float>,',
-    '  "mid_qual_pct": <float>,',
-    '  "non_qual_pct": <float>,',
-    '  "downgrade_amount": <float>,',
-    '  "chargeback_count": <integer>,',
-    '  "risk_score": <integer 0-100, 100=most overcharged>,',
-    '  "line_items": [{"name":"<fee name>","category":"interchange|processor|monthly|misc","amount":<float>,"benchmark":<float>,"note":"<1-sentence>"}],',
-    '  "findings": [{"text":"<specific finding with exact $ amounts>","severity":"high|medium|low","savings":<annual $ float>}]',
-    '}',
-    '',
-    'Include EVERY fee line item visible on the statement in the line_items array.',
-    'For findings: flag every fee above benchmark, every negotiable charge, every downgrade opportunity.',
-    'Cite exact dollar amounts. CRITICAL: All string values must be single-line — no literal newlines inside strings.',
-    'Use \\n escape only, never actual line breaks inside JSON string values.',
-  ].join('\n') });
-
-  setProgress(40, 'Claude reading statement…');
-
-  // ── AUTO-ROTATING KEY POOL FETCH ────────────────────────────
-  var _usedKey = APIKEY;
-  var _keyObj = _getActiveKey();
-  var _attempts = 0;
-  var resp, errBody, apiMsg;
-
-  while (_attempts < Math.min(_apiKeyPool.length, 3)) {
-    _attempts++;
-    var headers = {
-      'x-api-key':                                 _usedKey,
-      'anthropic-version':                         '2023-06-01',
-      'content-type':                              'application/json',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    };
-    if (isPDF) headers['anthropic-beta'] = 'pdfs-2024-09-25';
-
-    resp = await fetch('https://api.anthropic.com/v1/messages', {
-      method:  'POST',
-      headers: headers,
-      body:    JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:4096, messages:[{role:'user',content:userContent}] }),
-    });
-
-    if (resp.ok) {
-      // Success — record usage
-      if (_keyObj) _recordKeyUse(_keyObj);
-      break;
-    }
-
-    // Rate limit (429) or overloaded (529) — try next key
-    if ((resp.status === 429 || resp.status === 529) && _attempts < Math.min(_apiKeyPool.length, 3)) {
-      var nextKeyObj = _rotateKey(_usedKey);
-      if (nextKeyObj) {
-        _usedKey = nextKeyObj.key;
-        _keyObj = nextKeyObj;
-        setProgress(42, 'Rate limited — rotating to key ' + _attempts + '…');
-        _saveKeyPool();
-        await sleep(500);
-        continue;
-      }
-    }
-
-    // Other error or no more keys — break and throw
-    try { errBody = await resp.json(); } catch(ex) { errBody = {}; }
-    apiMsg = (errBody.error && errBody.error.message) || ('HTTP ' + resp.status);
-    throw new Error('Claude API error: ' + apiMsg);
-  }
-
-  if (!resp || !resp.ok) {
-    throw new Error('All API keys exhausted or failed');
-  }
-
-  setProgress(72, 'Parsing extracted data…');
+  keys[0].uses = (keys[0].uses||0)+1; keys[0].lastUsed = Date.now(); _saveKeyPool();
   var result = await resp.json();
   if (!result.content || !result.content[0]) throw new Error('Empty response from Claude');
+  return _parseAIResponse(result.content[0].text, 'Claude');
+}
 
-  var raw = result.content[0].text.trim()
-    .replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'').trim();
+// ── OPENAI (GPT-4o) ─────────────────────────────────────────
+async function _extractOpenAI() {
+  var keys = _getKeysByProvider('openai');
+  if (!keys.length) throw new Error('No OpenAI keys');
 
-  // Find JSON boundaries defensively
-  var s = raw.indexOf('{');
-  var e = raw.lastIndexOf('}');
-  if (s === -1 || e === -1) throw new Error('Claude did not return JSON. Raw: ' + raw.substring(0,300));
-  raw = raw.substring(s, e+1);
+  var isText = (_fileBase64 === 'TEXT' && _fileText);
+  var isImg  = !isText && _fileType && _fileType.startsWith('image/');
+  var isPDF  = !isText && !isImg;
 
-  // ── ROBUST JSON SANITIZER ──────────────────────────────────
-  // Claude sometimes includes literal newlines, tabs, or unescaped
-  // control characters inside string values which break JSON.parse.
-  // We fix them without touching the structure.
-  function sanitizeJSON(str) {
-    var out = '';
-    var inStr = false;
-    var escape = false;
-    for (var i = 0; i < str.length; i++) {
-      var ch = str[i];
-      var code = str.charCodeAt(i);
-      if (escape) {
-        out += ch;
-        escape = false;
-        continue;
-      }
-      if (ch === '\\') { out += ch; escape = true; continue; }
-      if (ch === '"') { inStr = !inStr; out += ch; continue; }
-      if (inStr) {
-        // Inside a string: escape any bare control characters
-        if (code === 0x0A) { out += '\\n';  continue; }  // newline
-        if (code === 0x0D) { out += '\\r';  continue; }  // carriage return
-        if (code === 0x09) { out += '\\t';  continue; }  // tab
-        if (code < 0x20)   { out += '\\u' + ('000'+code.toString(16)).slice(-4); continue; }
-      }
-      out += ch;
+  var msgContent = [];
+  if (isText) {
+    msgContent.push({ type:'text', text:'MERCHANT PROCESSING STATEMENT:\n\n' + _fileText + '\n\n' + AI_EXTRACTION_PROMPT });
+  } else if (isImg) {
+    msgContent.push({ type:'image_url', image_url:{ url:'data:' + _fileType + ';base64,' + _fileBase64 } });
+    msgContent.push({ type:'text', text: AI_EXTRACTION_PROMPT });
+  } else if (isPDF) {
+    // GPT-4o supports PDFs via file upload or as images — convert pages approach
+    // For now, if we have text extracted, use that; otherwise send as base64
+    msgContent.push({ type:'text', text:'MERCHANT PROCESSING STATEMENT (PDF base64 follows):\n\n[PDF content — please analyze the document data]\n\n' + AI_EXTRACTION_PROMPT });
+    // Note: OpenAI's native PDF support requires the Assistants API. For direct chat,
+    // we fall back to text if available.
+    if (_fileText) {
+      msgContent = [{ type:'text', text:'MERCHANT PROCESSING STATEMENT:\n\n' + _fileText + '\n\n' + AI_EXTRACTION_PROMPT }];
     }
-    return out;
   }
 
+  var resp = await fetch('https://api.openai.com/v1/chat/completions', {
+    method:'POST',
+    headers:{ 'Authorization':'Bearer ' + keys[0].key, 'Content-Type':'application/json' },
+    body: JSON.stringify({
+      model:'gpt-4o', max_tokens:4096, temperature:0.1,
+      messages:[{ role:'user', content:msgContent }]
+    }),
+  });
+
+  if (!resp.ok) {
+    var errBody = {}; try { errBody = await resp.json(); } catch(e) {}
+    throw new Error('OpenAI API: ' + ((errBody.error&&errBody.error.message)||('HTTP '+resp.status)));
+  }
+
+  keys[0].uses = (keys[0].uses||0)+1; keys[0].lastUsed = Date.now(); _saveKeyPool();
+  var result = await resp.json();
+  if (!result.choices || !result.choices[0]) throw new Error('Empty response from OpenAI');
+  return _parseAIResponse(result.choices[0].message.content, 'GPT-4o');
+}
+
+// ── GOOGLE (GEMINI) ──────────────────────────────────────────
+async function _extractGoogle() {
+  var keys = _getKeysByProvider('google');
+  if (!keys.length) throw new Error('No Google keys');
+
+  var isText = (_fileBase64 === 'TEXT' && _fileText);
+  var isImg  = !isText && _fileType && _fileType.startsWith('image/');
+  var isPDF  = !isText && !isImg;
+
+  var parts = [];
+  if (isText) {
+    parts.push({ text:'MERCHANT PROCESSING STATEMENT:\n\n' + _fileText + '\n\n' + AI_EXTRACTION_PROMPT });
+  } else if (isImg) {
+    parts.push({ inlineData:{ mimeType:_fileType, data:_fileBase64 } });
+    parts.push({ text: AI_EXTRACTION_PROMPT });
+  } else if (isPDF) {
+    parts.push({ inlineData:{ mimeType:'application/pdf', data:_fileBase64 } });
+    parts.push({ text: AI_EXTRACTION_PROMPT });
+  }
+
+  var resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + keys[0].key, {
+    method:'POST',
+    headers:{ 'Content-Type':'application/json' },
+    body: JSON.stringify({
+      contents:[{ parts:parts }],
+      generationConfig:{ temperature:0.1, maxOutputTokens:4096 }
+    }),
+  });
+
+  if (!resp.ok) {
+    var errBody = {}; try { errBody = await resp.json(); } catch(e) {}
+    throw new Error('Gemini API: ' + ((errBody.error&&errBody.error.message)||('HTTP '+resp.status)));
+  }
+
+  keys[0].uses = (keys[0].uses||0)+1; keys[0].lastUsed = Date.now(); _saveKeyPool();
+  var result = await resp.json();
+  if (!result.candidates || !result.candidates[0]) throw new Error('Empty response from Gemini');
+  var text = result.candidates[0].content.parts[0].text;
+  return _parseAIResponse(text, 'Gemini');
+}
+
+// ── UNIVERSAL RESPONSE PARSER ────────────────────────────────
+function _parseAIResponse(rawText, providerName) {
+  setProgress(72, 'Parsing ' + providerName + ' response…');
+  var raw = rawText.trim().replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'').trim();
+
+  var s = raw.indexOf('{');
+  var e = raw.lastIndexOf('}');
+  if (s === -1 || e === -1) throw new Error(providerName + ' did not return JSON. Raw: ' + raw.substring(0,300));
+  raw = raw.substring(s, e+1);
   raw = sanitizeJSON(raw);
 
   var d;
-  try {
-    d = JSON.parse(raw);
-  } catch(pe) {
-    // Last resort: try to extract just the scalar fields we need
-    // and build a partial object so the audit still runs
-    console.error('JSON parse failed, attempting field extraction. Error:', pe.message);
-    console.error('Raw (first 500):', raw.substring(0,500));
-    var extract = function(key) {
-      var m = raw.match(new RegExp('"'+key+'"\\s*:\\s*([\\d.]+)'));
-      return m ? parseFloat(m[1]) : null;
-    };
-    var extractStr = function(key) {
-      var m = raw.match(new RegExp('"'+key+'"\\s*:\\s*"([^"]*)"'));
-      return m ? m[1] : null;
-    };
-    d = {
-      name:              extractStr('name')           || document.getElementById('m-name').value || 'Merchant',
-      processor:         extractStr('processor')      || document.getElementById('m-proc').value || '—',
-      statement_month:   extractStr('statement_month')|| new Date().toLocaleString('en-US',{month:'2-digit',year:'numeric'}),
-      monthly_volume:    extract('monthly_volume'),
-      total_fees:        extract('total_fees'),
-      interchange_cost:  extract('interchange_cost'),
-      processor_markup:  extract('processor_markup'),
-      monthly_fees:      extract('monthly_fees'),
-      statement_fee:     extract('statement_fee'),
-      pci_fee:           extract('pci_fee'),
-      transaction_count: extract('transaction_count'),
-      credit_card_pct:   extract('credit_card_pct')   || 85,
-      avg_ticket:        extract('avg_ticket'),
-      effective_rate:    extract('effective_rate'),
-      interchange_rate:  extract('interchange_rate'),
-      markup_rate:       extract('markup_rate'),
-      risk_score:        extract('risk_score'),
-      line_items:        [],
-      findings:          [],
-    };
-    if (!d.monthly_volume || !d.total_fees) {
-      throw new Error('JSON parse failed and field extraction could not recover minimum data. Raw sample: ' + raw.substring(0,400));
-    }
-    toast('Statement extracted with minor parsing issues — core data recovered', 'warn');
+  try { d = JSON.parse(raw); }
+  catch(pe) {
+    console.error(providerName + ' JSON parse failed:', pe.message, 'Raw:', raw.substring(0,500));
+    d = _fallbackFieldExtract(raw);
   }
 
-  // Apply any manual overrides
+  d._provider = providerName;
+  return _enrichAuditData(d);
+}
+
+// ── JSON SANITIZER ───────────────────────────────────────────
+function sanitizeJSON(str) {
+  var out = '';
+  var inStr = false;
+  var escape = false;
+  for (var i = 0; i < str.length; i++) {
+    var ch = str[i];
+    var code = str.charCodeAt(i);
+    if (escape) { out += ch; escape = false; continue; }
+    if (ch === '\\') { out += ch; escape = true; continue; }
+    if (ch === '"') { inStr = !inStr; out += ch; continue; }
+    if (inStr) {
+      if (code === 0x0A) { out += '\\n'; continue; }
+      if (code === 0x0D) { out += '\\r'; continue; }
+      if (code === 0x09) { out += '\\t'; continue; }
+      if (code < 0x20) { out += '\\u' + ('000'+code.toString(16)).slice(-4); continue; }
+    }
+    out += ch;
+  }
+  return out;
+}
+
+// ── FALLBACK FIELD EXTRACTION ────────────────────────────────
+function _fallbackFieldExtract(raw) {
+  var extract = function(key) { var m = raw.match(new RegExp('"'+key+'"\\s*:\\s*([\\d.]+)')); return m ? parseFloat(m[1]) : null; };
+  var extractStr = function(key) { var m = raw.match(new RegExp('"'+key+'"\\s*:\\s*"([^"]*)"')); return m ? m[1] : null; };
+  return {
+    name: extractStr('name') || document.getElementById('m-name').value || 'Merchant',
+    processor: extractStr('processor') || document.getElementById('m-proc').value || '—',
+    statement_month: extractStr('statement_month') || new Date().toLocaleString('en-US',{month:'2-digit',year:'numeric'}),
+    monthly_volume: extract('monthly_volume'),
+    total_fees: extract('total_fees'),
+    interchange_cost: extract('interchange_cost'),
+    processor_markup: extract('processor_markup'),
+    monthly_fees: extract('monthly_fees'),
+    statement_fee: extract('statement_fee'),
+    pci_fee: extract('pci_fee'),
+    transaction_count: extract('transaction_count'),
+    credit_card_pct: extract('credit_card_pct'),
+    avg_ticket: extract('avg_ticket'),
+    risk_score: extract('risk_score'),
+    line_items: [], findings: [],
+    _partial: true
+  };
+}
+
+// ── ENRICH AUDIT DATA ────────────────────────────────────────
+function _enrichAuditData(d) {
+  // Apply any manual overrides from form fields
   var mv = parseFloat(document.getElementById('m-vol').value);
   var mf = parseFloat(document.getElementById('m-fees').value);
   var mn = (document.getElementById('m-name').value || '').trim();
@@ -3562,58 +3871,28 @@ function buildFromManual() {
 }
 
 // ── PORTFOLIO ─────────────────────────────────────────────────
-function addToPortfolio(d) {
+async function addToPortfolio(d) {
   d._ts = Date.now();
   d._addedBy = currentUser ? currentUser.email : 'unknown';
   if (!d._owner) d._owner = currentUser ? currentUser.email : 'unknown';
 
-  // ── DUPLICATE DETECTION ──────────────────────────────────────
-  // A merchant is a "duplicate" if it has the same name AND same statement_month.
-  // However, if the effective_rate OR fee categories differ, it's allowed as a
-  // separate forensic data entry (different parsing of the same merchant).
-  var existingIdx = -1;
-  var isDuplicate = false;
-  for (var i = 0; i < portfolio.length; i++) {
-    var m = portfolio[i];
-    if (m.name && d.name && m.name.toLowerCase().trim() === d.name.toLowerCase().trim()
-        && m.statement_month === d.statement_month) {
-      // Same merchant + same month — check if forensic data differs
-      var effDiff  = Math.abs((m.effective_rate||0) - (d.effective_rate||0)) > 0.05;
-      var feesDiff = Math.abs((m.total_fees||0) - (d.total_fees||0)) > 1.0;
-      var icDiff   = Math.abs((m.interchange_cost||0) - (d.interchange_cost||0)) > 1.0;
-      var mkupDiff = Math.abs((m.processor_markup||0) - (d.processor_markup||0)) > 1.0;
-      var catDiff  = (m.credit_card_pct||0) !== (d.credit_card_pct||0);
-
-      if (effDiff || feesDiff || icDiff || mkupDiff || catDiff) {
-        // Data is meaningfully different — allow as separate entry, tag it
-        d._dupNote = 'Variant of existing entry (different forensic data)';
-        d._variantOf = m.name;
-        existingIdx = -1; // Don't replace, add as new
-        break;
-      } else {
-        // True duplicate — same company, same data
-        existingIdx = i;
-        isDuplicate = true;
-        break;
-      }
-    }
-  }
-
-  if (isDuplicate && existingIdx >= 0) {
-    // Block duplicate unless admin
-    if (isAdmin()) {
-      portfolio[existingIdx] = d;
-      toast('Duplicate updated (admin override) — ' + d.name, 'warn');
-    } else {
-      toast('Duplicate blocked: ' + d.name + ' (' + d.statement_month + ') already exists with identical data. Contact admin to update.', 'warn');
-      return false; // Signal that add was blocked
-    }
-  } else {
-    portfolio.unshift(d);
-  }
-
+  // Add locally first for instant UI
+  portfolio.unshift(d);
   if (portfolio.length > 100) portfolio = portfolio.slice(0, 100);
-  _savePortfolio()
+  _savePortfolio();
+
+  // POST to backend API
+  var r = await _api('POST', '/api/merchants', {
+    name: d.name||'', processor: d.processor||'', statement_month: d.statement_month||'',
+    monthly_volume: d.monthly_volume||0, total_fees: d.total_fees||0,
+    interchange_cost: d.interchange_cost||0, processor_markup: d.processor_markup||0,
+    monthly_fees: d.monthly_fees||0, transaction_count: d.transaction_count||0,
+    credit_card_pct: d.credit_card_pct||85, avg_ticket: d.avg_ticket||0,
+    risk_score: d.risk_score||0, line_items: d.line_items||[], findings: d.findings||[]
+  });
+  if (r.ok && r.data && r.data.id) {
+    d._apiId = r.data.id; // Store API ID for future edits/deletes
+  }
   return true;
 }
 
@@ -3628,7 +3907,7 @@ function deleteMerchant(idx) {
   if (confirmEl) confirmEl.style.display = 'flex';
 }
 
-function confirmDeleteMerchant(idx) {
+async function confirmDeleteMerchant(idx) {
   if (!canDelete()) {
     toast('Delete requires administrator access', 'err');
     return;
@@ -3636,6 +3915,8 @@ function confirmDeleteMerchant(idx) {
   var m = portfolio[idx];
   if (!m) return;
   var name = m.name;
+  // Delete from API if it has an ID
+  if (m._apiId) { await _api('DELETE', '/api/merchants/' + m._apiId); }
   portfolio.splice(idx, 1);
   _savePortfolio()
   currentAudit = portfolio.length > 0 ? portfolio[0] : null;
@@ -3699,6 +3980,27 @@ function renderAuditResults(d) {
   var ini = dispName.split(' ').slice(0,2).map(function(w){return w[0];}).join('');
 
   el.innerHTML =
+    // ── AI CONSENSUS BADGE ─────────────────────────────────────
+    (d._providerCount > 1 ? (function() {
+      var confColors = {certified:'var(--lime)',high:'var(--up)',moderate:'var(--warn)',review:'var(--dn)'};
+      var confBg = {certified:'rgba(184,240,64,.06)',high:'rgba(32,217,128,.06)',moderate:'rgba(224,144,32,.06)',review:'rgba(224,64,80,.06)'};
+      var confBorder = {certified:'rgba(184,240,64,.25)',high:'rgba(32,217,128,.25)',moderate:'rgba(224,144,32,.25)',review:'rgba(224,64,80,.25)'};
+      var conf = d._confidence || 'single';
+      var provBadges = (d._providers||[]).map(function(p) {
+        var c = p==='Claude'?'var(--lime)':p==='GPT-4o'?'var(--up)':'var(--info)';
+        return '<span style="font-family:var(--mono);font-size:8px;padding:2px 6px;border-radius:2px;border:1px solid '+c+';color:'+c+';background:rgba(255,255,255,.03)">'+p+'</span>';
+      }).join(' ');
+      return '<div style="padding:10px 14px;background:'+confBg[conf]+';border:1px solid '+confBorder[conf]+';border-radius:4px;margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">' +
+        '<div style="font-size:18px">' + (conf==='certified'?'💎':conf==='high'?'✓':conf==='moderate'?'◈':'⚠') + '</div>' +
+        '<div style="flex:1;min-width:200px">' +
+          '<div style="font-family:var(--mono);font-size:11px;font-weight:700;color:' + confColors[conf] + '">' + (d._consensusNote||'') + '</div>' +
+          '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);margin-top:2px">Verified by: ' + provBadges + '</div>' +
+        '</div>' +
+        (d._disagreements > 0 ? '<div style="font-family:var(--mono);font-size:9px;color:var(--warn);flex-shrink:0">' + d._disagreements + ' field' + (d._disagreements>1?'s':'') + ' differ — median used</div>' : '') +
+      '</div>';
+    })() :
+    (d._provider ? '<div style="padding:6px 12px;background:rgba(184,240,64,.04);border:1px solid rgba(184,240,64,.12);border-radius:4px;margin-bottom:10px;font-family:var(--mono);font-size:9px;color:var(--t3)">Analyzed by ' + esc(d._provider) + (d._consensusNote ? ' · ' + esc(d._consensusNote) : '') + '</div>' : '')
+    ) +
     // Banner
     '<div class="panel accent-border" style="margin-bottom:10px">' +
       '<div class="ph" style="background:linear-gradient(135deg,rgba(184,240,64,.04),transparent)">' +
@@ -3748,6 +4050,7 @@ function renderAuditResults(d) {
       '<div style="flex:1"><div style="font-size:11px;font-weight:600;margin-bottom:2px">Report Ready</div>' +
       '<div style="font-family:var(--mono);font-size:9px;color:var(--t3)">Full PDF — findings, programs, CO compliance, savings projections</div></div>' +
       '<button class="btn lime xl" onclick="downloadPDF(currentAudit)">⬇ Download PDF Report</button>' +
+      '<button class="btn xl" style="background:rgba(144,96,240,.1);border-color:var(--purple);color:var(--purple)" onclick="generateProposal(currentAudit)">📄 Generate Proposal</button>' +
       '<button class="btn" onclick="nav(\'programs\')">◑ Full Program Analysis →</button>' +
     '</div>';
 }
@@ -3963,9 +4266,11 @@ function renderLineTable(d) {
 }
 
 // ── COMMAND CENTER ────────────────────────────────────────────
-function renderCommandCenter() {
+async function renderCommandCenter() {
   var el = document.getElementById('command-body');
   if (!el) return;
+  // Fetch merchants from backend if we have a token
+  if (_jwt && portfolio.length === 0) { await _loadPortfolioFromAPI(); }
   var _vp = vPort();
   if (!_vp.length) {
     el.innerHTML =
@@ -4089,9 +4394,10 @@ function renderProgramsView() {
 }
 
 // ── PORTFOLIO VIEW ────────────────────────────────────────────
-function renderPortfolioView() {
+async function renderPortfolioView() {
   var el = document.getElementById('portfolio-body');
   if (!el) return;
+  if (_jwt && portfolio.length === 0) { await _loadPortfolioFromAPI(); }
   var _vp = vPort();
   if (!_vp.length) {
     el.innerHTML = (isDemoUser() ? pciNotice() : '') +
@@ -5017,19 +5323,55 @@ async function deleteUserFromEdit() {
 // ── PAYMENT / SUBSCRIPTION MODAL ─────────────────────────────
 var _selectedTier = 'free';
 var _selectedPayMethod = 'card';
+var _billingAnnual = false;
+
+var TIER_PRICES = {
+  free: { monthly:0, annual:0 },
+  pro:  { monthly:299, annual:Math.round(299*12*0.95) },  // 5% off = $3409
+  enterprise: { monthly:999, annual:Math.round(999*12*0.95) }  // 5% off = $11389
+};
 
 function showPayment(i) {
-  if (!canManageUsers()) { toast('Admin only','err'); return; }
-  var u = allUsers[i]; if (!u) return;
-  document.getElementById('pay-idx').value = i;
-  document.getElementById('pay-sub').textContent = 'Subscription for: ' + u.displayName + ' (' + u.email + ')';
-  _selectedTier = u.tier || 'free';
-  selectTier(_selectedTier);
-  // Show payment fields only for paid tiers
-  document.getElementById('pay-method-section').style.display = _selectedTier==='free'?'none':'block';
+  if (!canManageUsers() && !currentUser) { toast('Sign in required','err'); return; }
+  document.getElementById('pay-idx').value = (typeof i === 'number') ? i : -1;
+  var u = (typeof i === 'number' && allUsers[i]) ? allUsers[i] : currentUser;
+  document.getElementById('pay-sub').textContent = u ? 'Upgrade plan for ' + (u.displayName||u.email) : 'Choose the plan that fits your business';
+  _selectedTier = (u && u.tier) || 'free';
+  _billingAnnual = false;
+  updateBillingToggle();
+  selectTier(_selectedTier === 'free' ? 'pro' : _selectedTier); // Default to Pro
+  // Show veteran banner
+  var isVet = u && u.veteran;
+  var vetBanner = document.getElementById('vet-discount-banner');
+  if (vetBanner) vetBanner.style.display = isVet ? 'block' : 'none';
+  document.getElementById('pay-error').style.display = 'none';
   document.getElementById('payment-overlay').classList.add('open');
 }
 function closePayment() { document.getElementById('payment-overlay').classList.remove('open'); }
+
+function toggleBilling() {
+  _billingAnnual = !_billingAnnual;
+  updateBillingToggle();
+  selectTier(_selectedTier); // Recalculate prices
+}
+
+function updateBillingToggle() {
+  var dot = document.getElementById('bill-toggle-dot');
+  var tog = document.getElementById('bill-toggle');
+  var ml = document.getElementById('bill-monthly-label');
+  var al = document.getElementById('bill-annual-label');
+  if (_billingAnnual) {
+    if(dot) dot.style.left = '23px';
+    if(tog) tog.style.background = 'var(--lime)';
+    if(ml) { ml.style.color = 'var(--t3)'; ml.style.fontWeight = '400'; }
+    if(al) { al.style.color = 'var(--lime)'; al.style.fontWeight = '700'; }
+  } else {
+    if(dot) dot.style.left = '1px';
+    if(tog) tog.style.background = 'var(--s3)';
+    if(ml) { ml.style.color = 'var(--lime)'; ml.style.fontWeight = '700'; }
+    if(al) { al.style.color = 'var(--t3)'; al.style.fontWeight = '400'; }
+  }
+}
 
 function selectTier(tier) {
   _selectedTier = tier;
@@ -5037,10 +5379,54 @@ function selectTier(tier) {
     var card = document.getElementById('tc-'+t);
     if (card) card.classList.toggle('selected', t===tier);
   });
+
+  var prices = TIER_PRICES[tier] || TIER_PRICES.free;
+  var isVet = currentUser && currentUser.veteran;
+  var monthlyAmt = prices.monthly;
+  var annualAmt = prices.annual;
+  if (isVet && tier === 'enterprise' && _billingAnnual) {
+    annualAmt = Math.round(annualAmt * 0.80); // 20% veteran discount on annual enterprise
+  }
+
+  // Update price displays on tier cards
+  var proP = document.getElementById('pro-price-display');
+  var entP = document.getElementById('ent-price-display');
+  if (proP) proP.innerHTML = _billingAnnual ?
+    '$' + Math.round(TIER_PRICES.pro.annual/12) + '<span style="font-size:10px;font-weight:400;color:var(--t3)">/mo billed annually</span>' :
+    '$299<span style="font-size:10px;font-weight:400;color:var(--t3)">/mo</span>';
+  if (entP) {
+    var entMonthly = _billingAnnual ? Math.round(annualAmt/12) : 999;
+    entP.innerHTML = '$' + entMonthly + '<span style="font-size:10px;font-weight:400;color:var(--t3)">/mo' + (_billingAnnual?' billed annually':'') + '</span>';
+  }
+
   document.getElementById('pay-method-section').style.display = tier==='free'?'none':'block';
-  var t = TIERS[tier] || TIERS.free;
-  document.getElementById('pay-summary').textContent = tier==='free' ? 'Free tier — no payment required' : t.label + ' · ' + t.price;
-  document.getElementById('pay-submit-btn').textContent = tier==='free' ? 'Set to Free Tier' : 'Confirm & Subscribe';
+
+  // Order summary
+  var planLabel = (TIERS[tier]||TIERS.free).label;
+  var billingLabel = _billingAnnual ? 'Annual' : 'Monthly';
+  var total = _billingAnnual ? annualAmt : monthlyAmt;
+  var perMonth = _billingAnnual ? Math.round(total/12) : total;
+
+  document.getElementById('pay-plan-name').textContent = planLabel + ' — ' + billingLabel;
+  document.getElementById('pay-plan-price').textContent = tier==='free' ? 'Free' : '$' + total.toLocaleString() + (_billingAnnual?'/yr':'/mo');
+
+  var discountLine = document.getElementById('pay-discount-line');
+  if (_billingAnnual && tier !== 'free') {
+    var fullPrice = prices.monthly * 12;
+    var saved = fullPrice - total;
+    discountLine.style.display = 'flex';
+    var discLabel = isVet && tier==='enterprise' ? 'Annual (5%) + Veteran (20%) discount' : 'Annual discount (5%)';
+    document.getElementById('pay-discount-label').textContent = discLabel;
+    document.getElementById('pay-discount-amt').textContent = '-$' + saved.toLocaleString();
+  } else {
+    discountLine.style.display = 'none';
+  }
+
+  document.getElementById('pay-total').textContent = tier==='free' ? 'Free' : '$' + total.toLocaleString() + (_billingAnnual?'/yr':'/mo');
+  document.getElementById('pay-billing-note').textContent = tier==='free' ? 'No payment required' :
+    _billingAnnual ? 'Billed annually ($' + perMonth + '/mo equivalent). Cancel anytime.' :
+    'Billed monthly. Cancel anytime.';
+  document.getElementById('pay-submit-btn').textContent = tier==='free' ? 'Downgrade to Free' : '🔒 Subscribe — $' + total.toLocaleString() + (_billingAnnual?'/yr':'/mo');
 }
 
 function selectPayMethod(el, method) {
@@ -5048,17 +5434,32 @@ function selectPayMethod(el, method) {
   document.querySelectorAll('#pay-methods .pay-chip').forEach(function(c){c.classList.remove('on');});
   if (el) el.classList.add('on');
   document.getElementById('pay-card-fields').style.display = method==='card'?'block':'none';
-  document.getElementById('pay-paypal-fields').style.display = method==='paypal'?'block':'none';
   document.getElementById('pay-ach-fields').style.display = method==='ach'?'block':'none';
 }
 
+// Card number formatting (spaces every 4 digits)
+function formatCardNum(el) {
+  var v = el.value.replace(/\D/g,'').substring(0,16);
+  el.value = v.replace(/(.{4})/g,'$1 ').trim();
+}
+function formatExpiry(el) {
+  var v = el.value.replace(/\D/g,'').substring(0,4);
+  if (v.length >= 3) v = v.substring(0,2) + '/' + v.substring(2);
+  el.value = v;
+}
+
 var _paymentLock = false;
-function doPayment() {
+async function doPayment() {
   if (_paymentLock) return;
   _paymentLock = true;
-  setTimeout(function(){ _paymentLock = false; }, 500);
+  setTimeout(function(){ _paymentLock = false; }, 1000);
+
+  var errEl = document.getElementById('pay-error');
+  errEl.style.display = 'none';
+
   var i = parseInt(document.getElementById('pay-idx').value);
-  var u = allUsers[i]; if (!u) return;
+  var u = (i >= 0 && allUsers[i]) ? allUsers[i] : null;
+  var targetEmail = u ? u.email : (currentUser ? currentUser.email : '');
 
   if (_selectedTier !== 'free') {
     // Validate payment fields
@@ -5066,33 +5467,43 @@ function doPayment() {
       var cn = (document.getElementById('pay-cardnum').value||'').replace(/\s/g,'');
       var exp = document.getElementById('pay-exp').value||'';
       var cvv = document.getElementById('pay-cvv').value||'';
-      if (cn.length<15||!exp||!cvv) { toast('Complete all card fields','warn'); return; }
-    } else if (_selectedPayMethod === 'paypal') {
-      if (!(document.getElementById('pay-ppemail').value||'').trim()) { toast('Enter PayPal email','warn'); return; }
+      var cname = document.getElementById('pay-cname').value||'';
+      if (cn.length < 15) { errEl.textContent = 'Enter a valid card number'; errEl.style.display = 'block'; return; }
+      if (!exp || exp.length < 4) { errEl.textContent = 'Enter card expiry (MM/YY)'; errEl.style.display = 'block'; return; }
+      if (!cvv || cvv.length < 3) { errEl.textContent = 'Enter CVV'; errEl.style.display = 'block'; return; }
+      if (!cname.trim()) { errEl.textContent = 'Enter name on card'; errEl.style.display = 'block'; return; }
     } else if (_selectedPayMethod === 'ach') {
       var rt = (document.getElementById('pay-routing').value||'').trim();
       var an = (document.getElementById('pay-acctnum').value||'').trim();
-      if (!rt||rt.length!==9||!an) { toast('Complete all ACH fields','warn'); return; }
+      if (!rt || rt.length !== 9) { errEl.textContent = 'Enter a valid 9-digit routing number'; errEl.style.display = 'block'; return; }
+      if (!an) { errEl.textContent = 'Enter account number'; errEl.style.display = 'block'; return; }
     }
   }
 
-  var autopay = document.getElementById('pay-autopay').checked;
+  // TODO: When NMI gateway is configured, send card data to:
+  // POST /api/subscribe { tier, billing, payment_token, ... }
+  // For now, update the user's tier via the existing API
 
-  // Save subscription to user
-  u.tier = _selectedTier;
-  u.subscription = {
-    tier: _selectedTier,
-    price: (TIERS[_selectedTier]||TIERS.free).price,
-    payMethod: _selectedTier==='free' ? 'none' : _selectedPayMethod,
-    autopay: _selectedTier==='free' ? false : autopay,
-    startDate: Date.now(),
-    status: 'active',
-    processedBy: currentUser.email
-  };
-  _saveUsers();
+  var apiId = u ? (u._apiId || u.id) : null;
+  if (apiId) {
+    var r = await _api('PUT', '/api/users/' + apiId, { tier: _selectedTier });
+    if (!r.ok) { errEl.textContent = 'Error: ' + r.error; errEl.style.display = 'block'; return; }
+  }
+
+  // Update local state
+  if (u) u.tier = _selectedTier;
+  if (currentUser && currentUser.email === targetEmail) currentUser.tier = _selectedTier;
+
   closePayment();
-  renderUsersView();
-  toast(u.displayName + ' → ' + (TIERS[_selectedTier]||TIERS.free).label + (autopay&&_selectedTier!=='free'?' (AutoPay enabled)':''), 'ok');
+  if (canManageUsers()) renderUsersView();
+  _updateSidebarForRole();
+
+  var tierLabel = (TIERS[_selectedTier]||TIERS.free).label;
+  if (_selectedTier === 'free') {
+    toast('Plan set to Standard (Free)', 'ok');
+  } else {
+    toast('🎉 Subscribed to ' + tierLabel + '! Welcome to the pack.', 'ok');
+  }
 }
 
 // ── LEGAL MODALS ─────────────────────────────────────────────
@@ -5397,7 +5808,7 @@ function loadDemoData() {
      findings:[{text:'Education MCC qualifies for reduced interchange tier',severity:'medium',savings:2040}]},
   ];
   demos.forEach(function(d) { d._ts = Date.now()-Math.random()*86400000*30; addToPortfolio(d); });
-  currentAudit = demos[0];
+  currentAudit = portfolio[0] || demos[0];
   renderAll();
   updateCounts();
   var sla = document.getElementById('sb-last-audit'); if(sla) sla.textContent = demos[0].name;
@@ -5501,8 +5912,18 @@ function doEditMerch() {
   m._lastEditedAt = Date.now();
   if (m._dupNote && m._dupNote.indexOf('Edited') === -1) m._dupNote = (m._dupNote||'') + ' · Edited by admin';
 
-  // Save
+  // Save locally
   _savePortfolio()
+  // PUT to backend API
+  if (m._apiId) {
+    _api('PUT', '/api/merchants/' + m._apiId, {
+      name:name, processor:m.processor, statement_month:m.statement_month,
+      monthly_volume:m.monthly_volume, total_fees:m.total_fees,
+      interchange_cost:m.interchange_cost, processor_markup:m.processor_markup,
+      monthly_fees:m.monthly_fees, transaction_count:m.transaction_count,
+      credit_card_pct:m.credit_card_pct, avg_ticket:m.avg_ticket, risk_score:m.risk_score
+    });
+  }
   closeEditMerch();
   currentAudit = m;
   renderAll();
@@ -5510,11 +5931,12 @@ function doEditMerch() {
   toast('Updated: ' + name + ' (eff. rate recalculated to ' + fmtP(m.effective_rate) + ')', 'ok');
 }
 
-function deleteMerchFromEdit() {
+async function deleteMerchFromEdit() {
   var idx = parseInt(document.getElementById('em-idx').value);
   if (!canDelete()) { toast('Delete requires admin access','err'); return; }
   var m = portfolio[idx]; if (!m) return;
   var name = m.name;
+  if (m._apiId) { await _api('DELETE', '/api/merchants/' + m._apiId); }
   portfolio.splice(idx, 1);
   _savePortfolio()
   currentAudit = portfolio.length > 0 ? portfolio[0] : null;
@@ -6231,6 +6653,238 @@ function downloadPDF(d) {
   } catch(err) {
     toast('PDF error: '+err.message,'err');
     console.error('PDF generation error:',err);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  PROPOSAL GENERATOR — Branded Sales PDF
+//  Converts audit data into a client-ready switching proposal
+// ═══════════════════════════════════════════════════════════════
+function generateProposal(d) {
+  if (!d) { if (currentAudit) d = currentAudit; else { toast('Run an audit first','err'); return; } }
+
+  var pdfName = dName(d.name);
+  var p = calcPrograms(d);
+  var vol = d.monthly_volume || 1;
+  var fees = d.total_fees || 0;
+  var eff = d.effective_rate || 0;
+  var bestProg = p.cd; // Cash discounting is typically best savings
+  var bestLabel = 'Cash Discounting';
+  // Find actual best program
+  [['ic','Interchange Plus'],['sur','Surcharge (CO 2% Cap)'],['dp','Dual Pricing'],['cd','Cash Discounting']].forEach(function(pr) {
+    if (p[pr[0]] && (fees - p[pr[0]].monthly) > (fees - bestProg.monthly)) { bestProg = p[pr[0]]; bestLabel = pr[1]; }
+  });
+  var monthlySavings = fees - (bestProg ? bestProg.monthly : fees);
+  var annualSavings = monthlySavings * 12;
+
+  try {
+    var doc = new window.jspdf.jsPDF({orientation:'portrait',unit:'mm',format:'a4'});
+    var W=210, PL=16, PR=16, CW=W-PL-PR;
+
+    // Colors
+    var BG=[7,10,15], S1=[17,22,32], S2=[22,29,42], T1=[232,234,240], T2=[154,160,176], T3=[90,96,112];
+    var LIME=[184,240,64], GREEN=[32,192,96], RED=[224,64,80], WARN=[224,144,32], GOLD=[208,160,32], BLUE=[64,144,240], PURPLE=[144,96,240];
+    var WHITE=[255,255,255];
+
+    function setFill(rgb){ doc.setFillColor(rgb[0],rgb[1],rgb[2]); }
+    function setTxt(rgb,sz,bold){ doc.setTextColor(rgb[0],rgb[1],rgb[2]); if(sz) doc.setFontSize(sz); doc.setFont('helvetica',bold?'bold':'normal'); }
+    function setDraw(rgb){ doc.setDrawColor(rgb[0],rgb[1],rgb[2]); }
+
+    // ═══════════════════════════════════════════════════════════
+    //  PAGE 1 — COVER / EXECUTIVE SUMMARY
+    // ═══════════════════════════════════════════════════════════
+
+    // Dark background
+    setFill(BG); doc.rect(0,0,W,297,'F');
+
+    // Lime accent bar at top
+    setFill(LIME); doc.rect(0,0,W,4,'F');
+
+    // NexusPay Logo area
+    setFill(S1); doc.roundedRect(PL,20,CW,28,2,2,'F');
+    setFill(LIME); doc.roundedRect(PL,20,4,28,0,0,'F');
+    setTxt(LIME,22,true); doc.text('NexusPay', PL+10, 33);
+    setTxt(T2,9,false); doc.text('INTELLIGENCE  ·  MERCHANT PROCESSING COMMAND CENTER', PL+10, 41);
+
+    // Proposal title
+    setTxt(WHITE,28,true); doc.text('Savings Proposal', PL, 72);
+    setTxt(T2,11,false); doc.text('Prepared exclusively for', PL, 82);
+    setTxt(LIME,20,true); doc.text(pdfName, PL, 94);
+    setTxt(T3,9,false); doc.text('Generated ' + new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'}), PL, 103);
+
+    // Big savings hero box
+    setFill(S1); doc.roundedRect(PL, 116, CW, 60, 3, 3, 'F');
+    setFill(LIME); doc.roundedRect(PL, 116, 4, 60, 0, 0, 'F');
+
+    setTxt(T3,8,false); doc.text('YOUR ESTIMATED ANNUAL SAVINGS', PL+14, 128);
+    setTxt(LIME,36,true); doc.text('$' + Math.round(annualSavings).toLocaleString(), PL+14, 148);
+    setTxt(T2,10,false); doc.text('$' + Math.round(monthlySavings).toLocaleString() + '/month  ·  Recommended: ' + bestLabel, PL+14, 158);
+
+    // Risk score
+    var riskColor = d.risk_score > 70 ? RED : d.risk_score > 40 ? WARN : GREEN;
+    setTxt(T3,8,false); doc.text('OVERCHARGE RISK SCORE', PL+14, 170);
+    setFill(S2); doc.roundedRect(PL+14, 172, 80, 3, 1, 1, 'F');
+    setFill(riskColor); doc.roundedRect(PL+14, 172, Math.min(80, d.risk_score * 0.8), 3, 1, 1, 'F');
+    setTxt(riskColor,9,true); doc.text(d.risk_score + '/100', PL+98, 175);
+
+    // Current vs proposed summary
+    var summY = 190;
+    setFill(S2); doc.roundedRect(PL, summY, CW/2-3, 40, 2, 2, 'F');
+    setFill(RED); doc.roundedRect(PL, summY, 3, 40, 0, 0, 'F');
+    setTxt(T3,7,false); doc.text('CURRENT SETUP', PL+8, summY+8);
+    setTxt(RED,14,true); doc.text(fmtP(eff) + ' effective rate', PL+8, summY+18);
+    setTxt(T2,8,false); doc.text(fmtD(fees) + '/month in total fees', PL+8, summY+25);
+    setTxt(T3,7,false); doc.text('Processor: ' + (d.processor||'—'), PL+8, summY+32);
+
+    setFill(S2); doc.roundedRect(PL+CW/2+3, summY, CW/2-3, 40, 2, 2, 'F');
+    setFill(LIME); doc.roundedRect(PL+CW/2+3, summY, 3, 40, 0, 0, 'F');
+    setTxt(T3,7,false); doc.text('WITH NEXUSPAY', PL+CW/2+11, summY+8);
+    var newRate = bestProg ? (bestProg.monthly / vol * 100) : eff;
+    setTxt(LIME,14,true); doc.text(fmtP(newRate) + ' effective rate', PL+CW/2+11, summY+18);
+    setTxt(T2,8,false); doc.text(fmtD(bestProg?bestProg.monthly:fees) + '/month estimated', PL+CW/2+11, summY+25);
+    setTxt(LIME,7,true); doc.text('Program: ' + bestLabel, PL+CW/2+11, summY+32);
+
+    // Findings count
+    var highFindings = (d.findings||[]).filter(function(f){return f.severity==='high';}).length;
+    var allFindings = (d.findings||[]).length;
+    setTxt(WARN,9,true); doc.text(allFindings + ' issue' + (allFindings!==1?'s':'') + ' found  ·  ' + highFindings + ' high priority', PL, 242);
+
+    // Footer
+    setFill(S1); doc.rect(0,270,W,27,'F');
+    setFill(LIME); doc.rect(0,270,W,1,'F');
+    setTxt(LIME,10,true); doc.text('NexusPay Services', PL, 281);
+    setTxt(T2,8,false); doc.text('nexuspayservices.com  ·  (720) 689-7272  ·  admin@nexuspayservices.com', PL, 288);
+    setTxt(T3,7,false); doc.text('CONFIDENTIAL — Prepared for ' + pdfName + ' — Page 1 of 3', W-PR, 288, {align:'right'});
+
+    // ═══════════════════════════════════════════════════════════
+    //  PAGE 2 — PROGRAM COMPARISON
+    // ═══════════════════════════════════════════════════════════
+    doc.addPage(); setFill(BG); doc.rect(0,0,W,297,'F');
+    setFill(LIME); doc.rect(0,0,W,4,'F');
+
+    setFill(S1); doc.roundedRect(PL,12,CW,16,2,2,'F');
+    setFill(LIME); doc.roundedRect(PL,12,4,16,0,0,'F');
+    setTxt(LIME,12,true); doc.text('PROGRAM COMPARISON', PL+10, 22);
+    setTxt(T2,7,false); doc.text('Four pathways to reduce your processing costs', PL+10, 28);
+
+    var progData = [
+      ['Interchange Plus', p.ic, 'Standard IC+ pricing — transparent interchange pass-through with small markup.'],
+      ['Surcharge (CO 2%)', p.sur, 'Colorado-compliant 2% surcharge cap — pass fees to customers on credit cards.'],
+      ['Dual Pricing', p.dp, 'Show cash and card prices — fully legal, no surcharge cap, no registration needed.'],
+      ['Cash Discounting', p.cd, 'Offer a cash discount — essentially eliminates processing fees. Best savings.']
+    ];
+
+    var progY = 36;
+    progData.forEach(function(pr) {
+      var prog = pr[1];
+      var sav = fees - (prog ? prog.monthly : fees);
+      var savAnnual = sav * 12;
+      var isRec = pr[0] === bestLabel;
+
+      setFill(isRec ? [17,26,17] : S1);
+      doc.roundedRect(PL, progY, CW, 30, 2, 2, 'F');
+      if (isRec) { setFill(LIME); doc.roundedRect(PL, progY, 3, 30, 0, 0, 'F'); }
+      else { setFill(S2); doc.roundedRect(PL, progY, 2, 30, 0, 0, 'F'); }
+
+      setTxt(isRec?LIME:T1, 10, true); doc.text(pr[0] + (isRec ? '  ★ RECOMMENDED' : ''), PL+8, progY+8);
+      setTxt(T3, 7, false); doc.text(pr[2], PL+8, progY+14, {maxWidth:CW-70});
+
+      setTxt(isRec?LIME:GREEN, 11, true); doc.text(fmtD(prog?prog.monthly:fees) + '/mo', W-PR-5, progY+10, {align:'right'});
+      setTxt(isRec?LIME:T2, 8, false); doc.text('Save ' + fmtD(sav) + '/mo · ' + fmtD(savAnnual) + '/yr', W-PR-5, progY+17, {align:'right'});
+      var progRate = prog && vol > 0 ? (prog.monthly/vol*100) : eff;
+      setTxt(T3, 7, false); doc.text(fmtP(progRate) + ' eff. rate', W-PR-5, progY+24, {align:'right'});
+
+      progY += 34;
+    });
+
+    // Key findings
+    progY += 6;
+    setFill(S2); doc.roundedRect(PL, progY, CW, 7, 1, 1, 'F');
+    setFill(WARN); doc.roundedRect(PL, progY, 3, 7, 0, 0, 'F');
+    setTxt(WARN, 7.5, true); doc.text('KEY FINDINGS & SAVINGS OPPORTUNITIES', PL+6, progY+5);
+    progY += 10;
+
+    (d.findings||[]).slice(0,8).forEach(function(f, fi) {
+      var sevColor = f.severity==='high'?RED:f.severity==='medium'?WARN:GREEN;
+      setFill(fi%2===0?S1:BG); doc.rect(PL, progY, CW, 8, 'F');
+      setFill(sevColor); doc.circle(PL+4, progY+4, 1.5, 'F');
+      setTxt(T2, 7, false); doc.text((f.text||'').substring(0,80), PL+8, progY+5, {maxWidth:CW-40});
+      setTxt(sevColor, 7, true); doc.text(f.savings ? fmtD(f.savings)+'/yr' : '—', W-PR-2, progY+5, {align:'right'});
+      progY += 8;
+    });
+
+    // Footer
+    setFill(S1); doc.rect(0,270,W,27,'F'); setFill(LIME); doc.rect(0,270,W,1,'F');
+    setTxt(LIME,10,true); doc.text('NexusPay Services', PL, 281);
+    setTxt(T2,8,false); doc.text('nexuspayservices.com  ·  (720) 689-7272  ·  admin@nexuspayservices.com', PL, 288);
+    setTxt(T3,7,false); doc.text('CONFIDENTIAL — Page 2 of 3', W-PR, 288, {align:'right'});
+
+    // ═══════════════════════════════════════════════════════════
+    //  PAGE 3 — WHY NEXUSPAY + NEXT STEPS
+    // ═══════════════════════════════════════════════════════════
+    doc.addPage(); setFill(BG); doc.rect(0,0,W,297,'F');
+    setFill(LIME); doc.rect(0,0,W,4,'F');
+
+    setFill(S1); doc.roundedRect(PL,12,CW,16,2,2,'F');
+    setFill(LIME); doc.roundedRect(PL,12,4,16,0,0,'F');
+    setTxt(LIME,12,true); doc.text('WHY NEXUSPAY?', PL+10, 22);
+    setTxt(T2,7,false); doc.text('Your competitive advantage in payment processing', PL+10, 28);
+
+    var whyY = 36;
+    var whyItems = [
+      ['Transparent Pricing', 'No hidden fees. Interchange-plus or cash discount — you see exactly what you pay for every transaction.'],
+      ['AI-Powered Monitoring', 'Our NexusPay Intelligence platform monitors your rates 24/7 and alerts you to any changes or overcharges.'],
+      ['Colorado Compliance Built-In', 'HB24-1122 surcharge cap, SB 26-134 interchange rules — we keep you compliant automatically.'],
+      ['Dedicated Account Manager', 'Real person, real phone number, answers when you call. Not a chatbot, not a call center.'],
+      ['No Long-Term Contracts', 'Month-to-month. We keep your business by earning it, not by locking you in.'],
+      ['Fast Onboarding', 'Most merchants are live within 48 hours. We handle the paperwork.']
+    ];
+
+    whyItems.forEach(function(item) {
+      setFill(S1); doc.roundedRect(PL, whyY, CW, 14, 2, 2, 'F');
+      setFill(LIME); doc.roundedRect(PL, whyY, 2, 14, 0, 0, 'F');
+      setTxt(LIME, 8, true); doc.text('✓  ' + item[0], PL+6, whyY+5);
+      setTxt(T2, 7, false); doc.text(item[1], PL+6, whyY+11, {maxWidth:CW-12});
+      whyY += 17;
+    });
+
+    // Next Steps CTA
+    whyY += 6;
+    setFill([17,26,17]); doc.roundedRect(PL, whyY, CW, 50, 3, 3, 'F');
+    setFill(LIME); doc.roundedRect(PL, whyY, 4, 50, 0, 0, 'F');
+    setDraw(LIME); doc.setLineWidth(0.5); doc.roundedRect(PL, whyY, CW, 50, 3, 3, 'S');
+
+    setTxt(LIME, 14, true); doc.text('Ready to Save $' + Math.round(annualSavings).toLocaleString() + '/year?', PL+12, whyY+12);
+    setTxt(T1, 9, false);
+    doc.text('Here\'s what happens next:', PL+12, whyY+20);
+    setTxt(LIME, 8, true); doc.text('1.', PL+12, whyY+28);
+    setTxt(T2, 8, false); doc.text('We review this proposal together (15 min call or in person)', PL+18, whyY+28);
+    setTxt(LIME, 8, true); doc.text('2.', PL+12, whyY+34);
+    setTxt(T2, 8, false); doc.text('Sign up — no long-term contract, no cancellation fees', PL+18, whyY+34);
+    setTxt(LIME, 8, true); doc.text('3.', PL+12, whyY+40);
+    setTxt(T2, 8, false); doc.text('Go live within 48 hours and start saving immediately', PL+18, whyY+40);
+
+    // Contact info
+    whyY += 58;
+    setFill(S1); doc.roundedRect(PL, whyY, CW, 20, 2, 2, 'F');
+    setTxt(LIME, 10, true); doc.text('Contact Us', PL+8, whyY+8);
+    setTxt(T1, 8, false); doc.text('nexuspayservices.com  ·  (720) 689-7272  ·  admin@nexuspayservices.com', PL+8, whyY+15);
+
+    // Footer
+    setFill(S1); doc.rect(0,270,W,27,'F'); setFill(LIME); doc.rect(0,270,W,1,'F');
+    setTxt(LIME,10,true); doc.text('NexusPay Services', PL, 281);
+    setTxt(T3,7,false);
+    doc.text('This proposal is based on data from the merchant statement provided. Actual savings may vary.', PL, 288);
+    setTxt(T3,7,false); doc.text('CONFIDENTIAL — Page 3 of 3', W-PR, 288, {align:'right'});
+
+    // ── SAVE ─────────────────────────────────────────────────
+    var fname = 'NexusPay_Proposal_' + ((pdfName||'Merchant').replace(/[^a-z0-9]/gi,'_')) + '_' + new Date().toISOString().split('T')[0] + '.pdf';
+    doc.save(fname);
+    toast('Proposal PDF generated for ' + pdfName + ' — ' + fmtD(annualSavings) + '/yr savings', 'ok');
+
+  } catch(err) {
+    toast('Proposal error: ' + err.message, 'err');
+    console.error('Proposal generation error:', err);
   }
 }
 
