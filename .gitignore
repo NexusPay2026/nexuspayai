@@ -1,8 +1,41 @@
+# ── Python ───────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.egg-info/
+dist/
+build/
+.eggs/
+*.egg
 venv/
 .venv/
+env/
+
+# ── Environment / Secrets ────────────────────────────────────
 .env
+.env.local
+.env.production
+
+# ── Database (no SQLite in production) ───────────────────────
 *.db
+*.sqlite
+*.sqlite3
+
+# ── IDE ──────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 .DS_Store
+
+# ── OS ───────────────────────────────────────────────────────
+Thumbs.db
+.DS_Store
+
+# ── Logs ─────────────────────────────────────────────────────
+*.log
+
+# ── Test / Coverage ──────────────────────────────────────────
+.pytest_cache/
+htmlcov/
+.coverage

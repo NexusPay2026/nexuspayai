@@ -1,23 +1,67 @@
-databases:
-  - name: nexuspay-db
-    plan: free
-    databaseName: nexuspay
-    user: nexuspay
+# ═══════════════════════════════════════════════════════════════
+#  NexusPay Intelligence — Render Blueprint
+#  Deploys: unified FastAPI backend + Postgres database
+# ═══════════════════════════════════════════════════════════════
 
 services:
   - type: web
-    name: nexuspay-api
+    name: nexuspay-api-ochi  # Matches your existing Render service — same URL
     runtime: python
-    plan: free
+    region: oregon
+    plan: starter  # $7/mo — always-on, no cold starts
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 2
+    healthCheckPath: /health
     envVars:
+      # ── App ────────────────────────────────────────────────
+      - key: APP_ENV
+        value: production
+      - key: API_BASE_URL
+        value: https://nexuspay-api.onrender.com
+      # ── Database (auto-linked from Render Postgres) ────────
       - key: DATABASE_URL
         fromDatabase:
           name: nexuspay-db
           property: connectionString
+      # ── Auth ───────────────────────────────────────────────
       - key: JWT_SECRET
         generateValue: true
-      - key: PYTHON_VERSION
-        value: "3.11.0"
+      - key: JWT_EXPIRE_HOURS
+        value: "72"
+      # ── AI Provider Keys (set manually in Render dashboard) ─
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: GROK_API_KEY
+        sync: false
+      # ── Cloudflare R2 (set manually in Render dashboard) ───
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        value: nexuspay-storage
+      # ── Frontend URLs ──────────────────────────────────────
+      - key: WEBSITE_URL
+        value: https://nexuspayservices.com
+      - key: LANDING_PAGE_URL
+        value: https://freeanalysis.nexuspayservices.com
+      - key: PORTAL_URL
+        value: https://nexuspayai.com
+      - key: DASHBOARD_URL
+        value: https://nexuspaydashboard.netlify.app
+      # ── Admin ──────────────────────────────────────────────
+      - key: ADMIN_EMAIL
+        value: admin@nexuspayservices.com
 
+databases:
+  - name: nexuspay-db
+    plan: starter  # $7/mo — 1GB, daily backups
+    region: oregon
+    databaseName: nexuspay
+    user: nexuspay
