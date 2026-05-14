@@ -86,22 +86,40 @@ If a field cannot be determined, use null. For effective_rate, calculate as (tot
 #  INDIVIDUAL AI PROVIDER CALLS (with vision/document support)
 # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-async def _extract_claude(file_base64: str, media_type: str) -> Dict:
+async def _extract_claude(file_base64: str, media_type: str, files: list = None) -> Dict:
     key = settings.ANTHROPIC_API_KEY
     if not key:
         return None
     content = []
-    if media_type == "application/pdf":
-        content.append({"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": file_base64}})
-    elif media_type.startswith("image"):
-        content.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": file_base64}})
+    headers = {"x-api-key": key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
+    has_pdf = False
+    if files and len(files) > 0:
+        content.append({"type": "text", "text": f"MERCHANT PROCESSING STATEMENT — {len(files)} PAGES. Analyze ALL pages as a single statement:"})
+        for pg in files:
+            mt = pg.get("type", "image/jpeg")
+            b64 = pg.get("base64", "")
+            if mt == "application/pdf":
+                content.append({"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64}})
+                has_pdf = True
+            elif mt.startswith("image"):
+                content.append({"type": "image", "source": {"type": "base64", "media_type": mt, "data": b64}})
+            else:
+                content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}})
     else:
-        content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": file_base64}})
+        if media_type == "application/pdf":
+            content.append({"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": file_base64}})
+            has_pdf = True
+        elif media_type.startswith("image"):
+            content.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": file_base64}})
+        else:
+            content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": file_base64}})
     content.append({"type": "text", "text": EXTRACT_PROMPT})
+    if has_pdf:
+        headers["anthropic-beta"] = "pdfs-2024-09-25"
     async with httpx.AsyncClient(timeout=120.0) as c:
         r = await c.post("https://api.anthropic.com/v1/messages",
-            headers={"x-api-key": key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-            json={"model": "claude-sonnet-4-20250514", "max_tokens": 1500, "messages": [{"role": "user", "content": content}]})
+            headers=headers,
+            json={"model": "claude-sonnet-4-20250514", "max_tokens": 4096, "messages": [{"role": "user", "content": content}]})
         if r.status_code != 200:
             raise Exception(f"Claude {r.status_code}: {r.text[:200]}")
         d = r.json()
@@ -109,46 +127,74 @@ async def _extract_claude(file_base64: str, media_type: str) -> Dict:
     return {"provider": "Claude", "raw": txt}
 
 
-async def _extract_openai(file_base64: str, media_type: str) -> Dict:
+async def _extract_openai(file_base64: str, media_type: str, files: list = None) -> Dict:
     key = settings.OPENAI_API_KEY
     if not key:
         return None
     content = []
-    if media_type.startswith("image") or media_type == "application/pdf":
-        content.append({"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{file_base64}"}})
-    content.append({"type": "text", "text": EXTRACT_PROMPT})
+    if files and len(files) > 0:
+        content.append({"type": "text", "text": f"MERCHANT PROCESSING STATEMENT — {len(files)} PAGES:"})
+        for pg in files:
+            mt = pg.get("type", "image/jpeg")
+            b64 = pg.get("base64", "")
+            if mt.startswith("image"):
+                content.append({"type": "image_url", "image_url": {"url": f"data:{mt};base64,{b64}"}})
+        content.append({"type": "text", "text": EXTRACT_PROMPT})
+    else:
+        if media_type.startswith("image") or media_type == "application/pdf":
+            content.append({"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{file_base64}"}})
+        content.append({"type": "text", "text": EXTRACT_PROMPT})
     async with httpx.AsyncClient(timeout=120.0) as c:
         r = await c.post("https://api.openai.com/v1/chat/completions",
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={"model": "gpt-4o", "max_tokens": 1500, "messages": [{"role": "user", "content": content}]})
+            json={"model": "gpt-4o", "max_tokens": 4096, "messages": [{"role": "user", "content": content}]})
         if r.status_code != 200:
             raise Exception(f"GPT-4o {r.status_code}: {r.text[:200]}")
         return {"provider": "GPT-4o", "raw": r.json()["choices"][0]["message"]["content"]}
 
 
-async def _extract_gemini(file_base64: str, media_type: str) -> Dict:
+async def _extract_gemini(file_base64: str, media_type: str, files: list = None) -> Dict:
     key = settings.GOOGLE_API_KEY
     if not key:
         return None
-    parts = [{"text": EXTRACT_PROMPT}]
-    if media_type.startswith("image") or media_type == "application/pdf":
-        parts.append({"inline_data": {"mime_type": media_type, "data": file_base64}})
+    parts = []
+    if files and len(files) > 0:
+        parts.append({"text": f"MERCHANT PROCESSING STATEMENT — {len(files)} PAGES:"})
+        for pg in files:
+            mt = pg.get("type", "image/jpeg")
+            b64 = pg.get("base64", "")
+            parts.append({"inline_data": {"mime_type": mt, "data": b64}})
+        parts.append({"text": EXTRACT_PROMPT})
+    else:
+        parts.append({"text": EXTRACT_PROMPT})
+        if media_type.startswith("image") or media_type == "application/pdf":
+            parts.append({"inline_data": {"mime_type": media_type, "data": file_base64}})
     async with httpx.AsyncClient(timeout=120.0) as c:
         r = await c.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={key}",
-            json={"contents": [{"parts": parts}], "generationConfig": {"temperature": 0.2, "maxOutputTokens": 1500}})
+            json={"contents": [{"parts": parts}], "generationConfig": {"temperature": 0.2, "maxOutputTokens": 4096}})
         if r.status_code != 200:
             raise Exception(f"Gemini {r.status_code}: {r.text[:200]}")
         return {"provider": "Gemini", "raw": r.json()["candidates"][0]["content"]["parts"][0]["text"]}
 
 
-async def _extract_grok(file_base64: str, media_type: str) -> Dict:
+async def _extract_grok(file_base64: str, media_type: str, files: list = None) -> Dict:
     key = settings.GROK_API_KEY
     if not key:
         return None
-    content = [{"type": "text", "text": EXTRACT_PROMPT}]
-    if media_type.startswith("image"):
-        content.append({"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{file_base64}"}})
+    content = []
+    if files and len(files) > 0:
+        content.append({"type": "text", "text": f"MERCHANT PROCESSING STATEMENT — {len(files)} PAGES:"})
+        for pg in files:
+            mt = pg.get("type", "image/jpeg")
+            b64 = pg.get("base64", "")
+            if mt.startswith("image"):
+                content.append({"type": "image_url", "image_url": {"url": f"data:{mt};base64,{b64}"}})
+        content.append({"type": "text", "text": EXTRACT_PROMPT})
+    else:
+        content.append({"type": "text", "text": EXTRACT_PROMPT})
+        if media_type.startswith("image"):
+            content.append({"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{file_base64}"}})
     async with httpx.AsyncClient(timeout=120.0) as c:
         r = await c.post("https://api.x.ai/v1/chat/completions",
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
@@ -175,7 +221,7 @@ def _parse_json(raw: str) -> Dict:
 #  4-AI PARALLEL EXTRACTION + CONSENSUS
 # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-async def _run_all_extractions(file_base64: str, media_type: str) -> Dict[str, Any]:
+async def _run_all_extractions(file_base64: str, media_type: str, files: list = None) -> Dict[str, Any]:
     """Run all 4 providers in parallel, merge results with consensus scoring."""
 
     providers = []
@@ -196,7 +242,7 @@ async def _run_all_extractions(file_base64: str, media_type: str) -> Dict[str, A
 
     async def _run(name, func):
         try:
-            raw = await func(file_base64, media_type)
+            raw = await func(file_base64, media_type, files=files)
             if raw:
                 parsed = _parse_json(raw["raw"])
                 parsed["_provider"] = name
@@ -386,7 +432,7 @@ async def extract_statement(req: ExtractRequest, user=Depends(get_current_user))
             r2_key = None
 
     # â”€â”€ Run all 4 AI providers in parallel â”€â”€
-    result = await _run_all_extractions(req.file_base64, media_type)
+    result = await _run_all_extractions(req.file_base64 or "", media_type, files=getattr(req, "files", None))
 
     # Attach R2 key and file metadata
     result["_r2_key"] = r2_key
@@ -585,13 +631,14 @@ async def generate_public_proposal(req: PublicProposalRequest):
 
 
 class PublicExtractRequest(BaseModel):
-    file_base64: str
+    file_base64: Optional[str] = None
     media_type: Optional[str] = None
     file_type: Optional[str] = None
     file_name: Optional[str] = "statement"
     business_name: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
+    files: Optional[list] = None  # Multi-page: [{"base64":"...","type":"image/jpeg"}, ...]
 
     def resolved_media_type(self) -> str:
         mt = self.media_type or self.file_type or ""
@@ -648,7 +695,7 @@ def _compute_forensic_grade(effective_rate: float) -> Dict[str, Any]:
 async def public_extract_statement(req: PublicExtractRequest, db: AsyncSession = Depends(get_db)):
     """Public: 4-AI extraction + auto-create Visitor lead + Merchant record."""
     media_type = req.resolved_media_type()
-    result = await _run_all_extractions(req.file_base64, media_type)
+    result = await _run_all_extractions(req.file_base64 or "", media_type, files=req.files)
 
     biz = result.get("business_name") or req.business_name or "Unknown Business"
     vol = result.get("monthly_volume") or 0
