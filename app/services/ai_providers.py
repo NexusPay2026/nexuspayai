@@ -1,23 +1,51 @@
 """
 AI Provider Service — server-side orchestration.
-Keys are read from Render env vars (never from frontend).
-Supports: Anthropic Claude, OpenAI GPT-4o, Google Gemini, xAI Grok.
+
+SECURITY: API keys are read from Render env vars via app.config.settings.
+They are NEVER sent to or read from the frontend. The browser uploads only the
+file; this module calls every provider and returns merged results.
+
+RELIABILITY DESIGN
+------------------
+- All providers run in parallel; whichever have a valid key participate.
+- PDFs are read by EVERY provider:
+    * Claude + Gemini receive the native PDF (vision) — handles scans too.
+    * GPT-4o + Grok receive server-side-extracted text (they cannot decode a
+      base64 PDF as prompt text — the previous bug that silently dropped them).
+- max_tokens is high enough that multi-page line-item JSON is not truncated.
+- temperature is 0 for deterministic arithmetic (accounting/math reliability).
+- Per-provider failures are captured and RETURNED (_errors) and logged — never
+  swallowed silently. A partial run no longer looks like a clean single result.
+- Model names come from env vars (settings.*_MODEL); upgrade without code edits.
 """
 
+import io
 import json
-import httpx
+import base64
+import logging
+import asyncio
+from collections import Counter
 from typing import Optional, List, Dict, Any
+
+import httpx
 
 from app.config import settings
 
-AI_EXTRACTION_PROMPT = """You are a Senior Forensic Payment Processing Analyst.
-Analyze this merchant processing statement and extract ALL financial data precisely.
-Use exact numbers from the document. Calculate any value that can be derived from others.
+logger = logging.getLogger("nexuspay.ai")
 
-Return ONLY a valid JSON object. No markdown fences, no preamble, no trailing text.
-Start your response with { and end with }.
+AI_EXTRACTION_PROMPT = """You are a Senior Forensic Payment Processing Analyst with CPA-level numerical discipline.
 
-Schema (null only if truly undetectable):
+Read the ENTIRE statement PAGE BY PAGE, LINE BY LINE. Do not skip any page or any line. Many merchant statements run 3-5 pages; fee schedules and totals frequently appear on later pages, so you MUST process every page to the end before answering.
+
+Extraction rules:
+- Use the EXACT numbers printed on the document. Do not estimate or round source figures.
+- Capture EVERY fee line item, including small ones (PCI, regulatory, statement, batch, network access, dues & assessments, downgrades).
+- Re-derive any value you can compute from others, and VERIFY your arithmetic before reporting it (e.g., effective_rate = total_fees / monthly_volume * 100). Internally double-check each calculation; report only verified figures.
+- If a value genuinely does not appear and cannot be derived, use null. Do not invent numbers.
+
+Return ONLY a valid JSON object. No markdown fences, no preamble, no trailing text. Start with { and end with }.
+
+Schema:
 {
   "name": "<exact business name>",
   "processor": "<processor/acquirer name>",
@@ -27,6 +55,22 @@ Schema (null only if truly undetectable):
   "interchange_cost": <float>,
   "processor_markup": <float>,
   "monthly_fees": <total fixed recurring fees as float>,
+  "statement_fee": <float>,
+  "monthly_service_fee": <float>,
+  "pci_fee": <float>,
+  "batch_fee": <float>,
+  "debit_pct": <float 0-100>,
+  "credit_volume": <float>,
+  "debit_volume": <float>,
+  "visa_volume": <float>,
+  "mc_volume": <float>,
+  "amex_volume": <float>,
+  "disc_volume": <float>,
+  "qualified_pct": <float>,
+  "mid_qual_pct": <float>,
+  "non_qual_pct": <float>,
+  "downgrade_amount": <float>,
+  "chargeback_count": <integer>,
   "transaction_count": <integer>,
   "credit_card_pct": <float 0-100>,
   "avg_ticket": <float>,
@@ -34,29 +78,63 @@ Schema (null only if truly undetectable):
   "interchange_rate": <interchange_cost/monthly_volume*100>,
   "markup_rate": <processor_markup/monthly_volume*100>,
   "risk_score": <integer 0-100, 100=most overcharged>,
+  "pages_detected": <integer total pages you read>,
   "line_items": [{"name":"<fee name>","category":"interchange|processor|monthly|misc","amount":<float>,"benchmark":<float>,"note":"<1-sentence>"}],
   "findings": [{"text":"<specific finding with exact $ amounts>","severity":"high|medium|low","savings":<annual $ float>}]
 }
 
-Include EVERY fee line item visible on the statement in the line_items array.
-For findings: flag every fee above benchmark, every negotiable charge, every downgrade opportunity.
-Cite exact dollar amounts."""
+Include EVERY fee line item visible across ALL pages in line_items.
+For findings: flag every fee above benchmark, every negotiable charge, every downgrade opportunity, citing exact dollar amounts. Do not stop until every page and every line item has been accounted for."""
 
 
-async def _call_anthropic(file_b64: str, media_type: str) -> Optional[Dict]:
+# ────────────────────────────────────────────────────────────
+#  PDF text extraction (so text-only providers see every page)
+# ────────────────────────────────────────────────────────────
+def _extract_pdf_text(file_b64: str) -> str:
+    """Extract text from a base64 PDF, page by page. Empty string if no text layer."""
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        logger.error("pypdf not installed — add 'pypdf' to requirements.txt")
+        return ""
+    try:
+        raw = base64.b64decode(file_b64)
+        reader = PdfReader(io.BytesIO(raw))
+        total = len(reader.pages)
+        chunks = []
+        for i, page in enumerate(reader.pages, start=1):
+            txt = (page.extract_text() or "").strip()
+            chunks.append(f"\n===== PAGE {i} OF {total} =====\n{txt}")
+        out = "".join(chunks).strip()
+        logger.info("PDF text extraction: %d page(s), %d chars", total, len(out))
+        return out
+    except Exception as e:
+        logger.warning("PDF text extraction failed: %s", e)
+        return ""
+
+
+def _http_timeout() -> httpx.Timeout:
+    return httpx.Timeout(settings.AI_TIMEOUT)
+
+
+# ────────────────────────────────────────────────────────────
+#  Provider calls
+#  Each receives: native base64 (file_b64), media_type, and pdf_text
+#  (extracted text for PDFs; empty for images/plain text input).
+# ────────────────────────────────────────────────────────────
+async def _call_anthropic(file_b64: str, media_type: str, pdf_text: str) -> Optional[Dict]:
     if not settings.ANTHROPIC_API_KEY:
         return None
 
     is_pdf = media_type == "application/pdf"
     is_image = media_type.startswith("image/")
 
-    content = []
+    content: List[Dict[str, Any]] = []
     if is_pdf:
         content.append({"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": file_b64}})
     elif is_image:
         content.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": file_b64}})
     else:
-        # text-based
         content.append({"type": "text", "text": f"MERCHANT PROCESSING STATEMENT:\n\n{file_b64}"})
     content.append({"type": "text", "text": AI_EXTRACTION_PROMPT})
 
@@ -68,104 +146,132 @@ async def _call_anthropic(file_b64: str, media_type: str) -> Optional[Dict]:
     if is_pdf:
         headers["anthropic-beta"] = "pdfs-2024-09-25"
 
-    async with httpx.AsyncClient(timeout=120) as client:
+    async with httpx.AsyncClient(timeout=_http_timeout()) as client:
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",
             headers=headers,
             json={
-                "model": "claude-sonnet-4-20250514",
-                "max_tokens": 4096,
+                "model": settings.ANTHROPIC_MODEL,
+                "max_tokens": settings.AI_MAX_TOKENS,
+                "temperature": settings.AI_TEMPERATURE,
                 "messages": [{"role": "user", "content": content}],
             },
         )
     if resp.status_code != 200:
-        raise Exception(f"Claude API error: {resp.status_code} — {resp.text[:300]}")
+        raise Exception(f"Claude API error {resp.status_code}: {resp.text[:300]}")
 
     data = resp.json()
-    text = data["content"][0]["text"]
+    text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
     return {"provider": "Claude", "raw": text}
 
 
-async def _call_openai(file_b64: str, media_type: str) -> Optional[Dict]:
+async def _call_openai(file_b64: str, media_type: str, pdf_text: str) -> Optional[Dict]:
     if not settings.OPENAI_API_KEY:
         return None
 
     is_image = media_type.startswith("image/")
+    is_pdf = media_type == "application/pdf"
 
-    msg_content = []
+    msg_content: List[Dict[str, Any]] = []
     if is_image:
         msg_content.append({"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{file_b64}"}})
         msg_content.append({"type": "text", "text": AI_EXTRACTION_PROMPT})
+    elif is_pdf:
+        if not pdf_text:
+            raise Exception("PDF has no extractable text layer (likely scanned). "
+                            "GPT-4o needs text or an image; Claude/Gemini handled it via vision.")
+        msg_content.append({"type": "text", "text": f"MERCHANT PROCESSING STATEMENT (all pages):\n\n{pdf_text}\n\n{AI_EXTRACTION_PROMPT}"})
     else:
         msg_content.append({"type": "text", "text": f"MERCHANT PROCESSING STATEMENT:\n\n{file_b64}\n\n{AI_EXTRACTION_PROMPT}"})
 
-    async with httpx.AsyncClient(timeout=120) as client:
+    async with httpx.AsyncClient(timeout=_http_timeout()) as client:
         resp = await client.post(
             "https://api.openai.com/v1/chat/completions",
             headers={"Authorization": f"Bearer {settings.OPENAI_API_KEY}", "Content-Type": "application/json"},
             json={
-                "model": "gpt-4o",
-                "max_tokens": 4096,
-                "temperature": 0.1,
+                "model": settings.OPENAI_MODEL,
+                "max_tokens": settings.AI_MAX_TOKENS,
+                "temperature": settings.AI_TEMPERATURE,
                 "messages": [{"role": "user", "content": msg_content}],
             },
         )
     if resp.status_code != 200:
-        raise Exception(f"OpenAI API error: {resp.status_code} — {resp.text[:300]}")
+        raise Exception(f"OpenAI API error {resp.status_code}: {resp.text[:300]}")
 
     data = resp.json()
     text = data["choices"][0]["message"]["content"]
     return {"provider": "GPT-4o", "raw": text}
 
 
-async def _call_gemini(file_b64: str, media_type: str) -> Optional[Dict]:
+async def _call_gemini(file_b64: str, media_type: str, pdf_text: str) -> Optional[Dict]:
     if not settings.GOOGLE_API_KEY:
         return None
 
-    parts = []
-    if media_type in ("application/pdf",) or media_type.startswith("image/"):
+    parts: List[Dict[str, Any]] = []
+    if media_type == "application/pdf" or media_type.startswith("image/"):
         parts.append({"inlineData": {"mimeType": media_type, "data": file_b64}})
     else:
         parts.append({"text": f"MERCHANT PROCESSING STATEMENT:\n\n{file_b64}"})
     parts.append({"text": AI_EXTRACTION_PROMPT})
 
-    async with httpx.AsyncClient(timeout=120) as client:
+    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{settings.GEMINI_MODEL}:generateContent?key={settings.GOOGLE_API_KEY}")
+
+    async with httpx.AsyncClient(timeout=_http_timeout()) as client:
         resp = await client.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={settings.GOOGLE_API_KEY}",
+            url,
             headers={"Content-Type": "application/json"},
             json={
                 "contents": [{"parts": parts}],
-                "generationConfig": {"temperature": 0.1, "maxOutputTokens": 4096},
+                "generationConfig": {"temperature": settings.AI_TEMPERATURE, "maxOutputTokens": settings.AI_MAX_TOKENS},
             },
         )
     if resp.status_code != 200:
-        raise Exception(f"Gemini API error: {resp.status_code} — {resp.text[:300]}")
+        raise Exception(f"Gemini API error {resp.status_code}: {resp.text[:300]}")
 
     data = resp.json()
     text = data["candidates"][0]["content"]["parts"][0]["text"]
     return {"provider": "Gemini", "raw": text}
 
 
-async def _call_grok(file_b64: str, media_type: str) -> Optional[Dict]:
+async def _call_grok(file_b64: str, media_type: str, pdf_text: str) -> Optional[Dict]:
     if not settings.GROK_API_KEY:
         return None
 
-    # xAI Grok uses an OpenAI-compatible API
-    msg_content = [{"type": "text", "text": f"MERCHANT PROCESSING STATEMENT:\n\n{file_b64}\n\n{AI_EXTRACTION_PROMPT}"}]
+    is_image = media_type.startswith("image/")
+    is_pdf = media_type == "application/pdf"
 
-    async with httpx.AsyncClient(timeout=120) as client:
+    if is_image:
+        if not settings.GROK_VISION_MODEL:
+            raise Exception("Image input: GROK_VISION_MODEL not set, skipping Grok for this image.")
+        model = settings.GROK_VISION_MODEL
+        msg_content = [
+            {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{file_b64}"}},
+            {"type": "text", "text": AI_EXTRACTION_PROMPT},
+        ]
+    else:
+        model = settings.GROK_MODEL
+        if is_pdf:
+            if not pdf_text:
+                raise Exception("PDF has no extractable text layer (likely scanned); Grok needs text input.")
+            body_text = f"MERCHANT PROCESSING STATEMENT (all pages):\n\n{pdf_text}\n\n{AI_EXTRACTION_PROMPT}"
+        else:
+            body_text = f"MERCHANT PROCESSING STATEMENT:\n\n{file_b64}\n\n{AI_EXTRACTION_PROMPT}"
+        msg_content = [{"type": "text", "text": body_text}]
+
+    async with httpx.AsyncClient(timeout=_http_timeout()) as client:
         resp = await client.post(
             "https://api.x.ai/v1/chat/completions",
             headers={"Authorization": f"Bearer {settings.GROK_API_KEY}", "Content-Type": "application/json"},
             json={
-                "model": "grok-3",
-                "max_tokens": 4096,
-                "temperature": 0.1,
+                "model": model,
+                "max_tokens": settings.AI_MAX_TOKENS,
+                "temperature": settings.AI_TEMPERATURE,
                 "messages": [{"role": "user", "content": msg_content}],
             },
         )
     if resp.status_code != 200:
-        raise Exception(f"Grok API error: {resp.status_code} — {resp.text[:300]}")
+        raise Exception(f"Grok API error {resp.status_code}: {resp.text[:300]}")
 
     data = resp.json()
     text = data["choices"][0]["message"]["content"]
@@ -179,41 +285,38 @@ def _parse_ai_json(raw_text: str) -> Dict:
     start = text.find("{")
     end = text.rfind("}")
     if start == -1 or end == -1:
-        raise ValueError("No JSON object found in response")
+        raise ValueError("No JSON object found in response (possibly truncated).")
     json_str = text[start:end + 1]
-    # Sanitize literal newlines inside strings
     sanitized = []
     in_str = False
     escape = False
     for ch in json_str:
         if escape:
-            sanitized.append(ch)
-            escape = False
-            continue
+            sanitized.append(ch); escape = False; continue
         if ch == "\\":
-            sanitized.append(ch)
-            escape = True
-            continue
+            sanitized.append(ch); escape = True; continue
         if ch == '"':
-            in_str = not in_str
-            sanitized.append(ch)
-            continue
+            in_str = not in_str; sanitized.append(ch); continue
         if in_str and ch == "\n":
-            sanitized.append("\\n")
-            continue
+            sanitized.append("\\n"); continue
         if in_str and ch == "\r":
-            sanitized.append("\\r")
-            continue
+            sanitized.append("\\r"); continue
         sanitized.append(ch)
     return json.loads("".join(sanitized))
 
 
+def provider_status() -> Dict[str, bool]:
+    """Which providers have a key configured. Wire to GET /api/audit/providers for live diagnostics."""
+    return settings.ai_provider_status
+
+
 async def run_audit_all_providers(file_b64: str, media_type: str) -> Dict[str, Any]:
     """
-    Run extraction across all configured AI providers in parallel.
-    Returns consensus results.
+    Run extraction across all configured AI providers in parallel and return
+    consensus. Per-provider failures are recorded in result["_errors"] and logged.
     """
-    import asyncio
+    # Extract PDF text ONCE so text-only providers (GPT-4o, Grok) see every page.
+    pdf_text = _extract_pdf_text(file_b64) if media_type == "application/pdf" else ""
 
     providers = []
     if settings.ANTHROPIC_API_KEY:
@@ -226,22 +329,28 @@ async def run_audit_all_providers(file_b64: str, media_type: str) -> Dict[str, A
         providers.append(("Grok", _call_grok))
 
     if not providers:
-        raise ValueError("No AI provider keys configured in environment variables")
+        raise ValueError("No AI provider keys configured in environment variables.")
 
-    results = []
-    errors = []
+    results: List[Dict] = []
+    errors: List[Dict] = []
 
     async def _run(name, func):
         try:
-            raw_result = await func(file_b64, media_type)
+            raw_result = await func(file_b64, media_type, pdf_text)
             if raw_result:
                 parsed = _parse_ai_json(raw_result["raw"])
                 parsed["_provider"] = name
                 results.append(parsed)
+                logger.info("Provider OK: %s", name)
         except Exception as e:
             errors.append({"provider": name, "error": str(e)})
+            logger.warning("Provider FAILED: %s — %s", name, e)
 
     await asyncio.gather(*[_run(name, func) for name, func in providers])
+
+    # Always log the full run summary so partial failures are visible in Render logs.
+    logger.info("Audit run: attempted=%d succeeded=%d failed=%d errors=%s",
+                len(providers), len(results), len(errors), errors)
 
     if not results:
         error_msgs = "; ".join(f"{e['provider']}: {e['error']}" for e in errors)
@@ -250,30 +359,36 @@ async def run_audit_all_providers(file_b64: str, media_type: str) -> Dict[str, A
     if len(results) == 1:
         r = results[0]
         r["_providerCount"] = 1
+        r["_providers"] = [r.get("_provider")]
         r["_confidence"] = "single"
+        r["_errors"] = errors           # <-- now surfaced, not swallowed
         return r
 
-    # Build consensus from multiple results
-    return _build_consensus(results)
+    consensus = _build_consensus(results)
+    consensus["_errors"] = errors       # <-- surfaced even on a successful multi-run
+    return consensus
 
 
 def _build_consensus(results: List[Dict]) -> Dict:
-    """Merge results from multiple providers using median/majority vote."""
+    """Merge results from multiple providers using tolerance-band averaging / median."""
     numeric_fields = [
         "monthly_volume", "total_fees", "interchange_cost", "processor_markup",
         "monthly_fees", "transaction_count", "credit_card_pct", "avg_ticket",
         "effective_rate", "interchange_rate", "markup_rate", "risk_score",
+        "statement_fee", "monthly_service_fee", "pci_fee", "batch_fee",
+        "debit_pct", "credit_volume", "debit_volume", "visa_volume",
+        "mc_volume", "amex_volume", "disc_volume", "qualified_pct",
+        "mid_qual_pct", "non_qual_pct", "downgrade_amount", "chargeback_count",
     ]
     string_fields = ["name", "processor", "statement_month"]
 
-    consensus = {}
+    consensus: Dict[str, Any] = {}
     agreements = 0
     total_fields = 0
 
     for field in string_fields:
         values = [str(r.get(field, "")).strip() for r in results if r.get(field)]
         if values:
-            from collections import Counter
             most_common = Counter(v.lower() for v in values).most_common(1)[0][0]
             consensus[field] = next(v for v in values if v.lower() == most_common)
         else:
@@ -300,7 +415,6 @@ def _build_consensus(results: List[Dict]) -> Dict:
             median = sorted_v[mid] if len(sorted_v) % 2 else (sorted_v[mid - 1] + sorted_v[mid]) / 2
             consensus[field] = round(median, 2)
 
-    # Merge line items and findings
     seen_items = set()
     all_items = []
     for r in results:
@@ -332,5 +446,4 @@ def _build_consensus(results: List[Dict]) -> Dict:
         "review"
     )
     consensus["_agreePct"] = agree_pct
-
     return consensus
