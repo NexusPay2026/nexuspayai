@@ -1397,7 +1397,13 @@ html,body{height:100%;overflow:hidden;background:var(--void);color:var(--t1);fon
 //  NEXUSPAY API LAYER — Phase 2
 //  Backend: https://nexuspay-api-ochi.onrender.com
 // ═══════════════════════════════════════════════════════════════
-var API_BASE = 'https://nexuspay-api-ochi.onrender.com';
+var API_BASE = (function(){
+  var h = (typeof location !== 'undefined' ? location.hostname : '');
+  if (h === 'localhost' || h === '127.0.0.1' || h.indexOf('staging') !== -1 || h.indexOf('--') !== -1) {
+    return 'https://nexuspay-api-staging.onrender.com';
+  }
+  return 'https://nexuspay-api-ochi.onrender.com';
+})();
 var _jwt = '';
 try { _jwt = localStorage.getItem('np_jwt') || ''; } catch(e) {}
 
@@ -3154,10 +3160,21 @@ function buildAuditView() {
     '</div>' +
     '<div class="split-6-4">' +
       '<div>' +
+        '<div class="section-hdr"><div class="sh-title">Statement Period &amp; Consent <span style="color:var(--dn)">*</span></div>' +
+        '<div class="sh-sub">Required - needed for accurate dedup and revision tracking</div></div>' +
+        '<div class="fgrid-2" style="margin-bottom:14px">' +
+          '<div class="field"><label>Statement Date (Month) *</label><input type="month" id="m-stmt-date" required/></div>' +
+          '<div class="field" style="display:flex;align-items:center">' +
+            '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-weight:normal;line-height:1.5">' +
+              '<input type="checkbox" id="m-consent" style="margin-top:3px"/>' +
+              '<span style="font-size:10px;color:var(--t2)">I authorize NexusPay to store and process this statement. AI subprocessors (Anthropic, OpenAI, Google, xAI) receive the statement content for extraction. Files are retained per the NexusPay chain-of-custody policy.</span>' +
+            '</label>' +
+          '</div>' +
+        '</div>' +
         '<div class="section-hdr"><div class="sh-title">Statement Upload</div>' +
         '<div class="sh-sub">PDF · CSV · TXT · JPG · PNG — drag &amp; drop or click</div></div>' +
         '<div class="drop-z" id="drop-z">' +
-          '<input type="file" id="file-inp" accept=".pdf,.csv,.txt,.png,.jpg,.jpeg,.tiff,.bmp" onchange="onFileSelect(event)">' +
+          '<input type="file" id="file-inp" multiple accept=".pdf,.csv,.txt,.png,.jpg,.jpeg,.tiff,.bmp" onchange="onFileSelect(event)">' +
           '<div style="font-size:26px;margin-bottom:8px">📄</div>' +
           '<div class="drop-title">Drop merchant statement or click to browse</div>' +
           '<div class="drop-sub" style="margin-top:4px">Fiserv · Square · Stripe · Clover · Heartland · TSYS · Worldpay · Any processor</div>' +
@@ -3352,7 +3369,12 @@ async function runAudit() {
     var sla = document.getElementById('sb-last-audit');
     if (sla) sla.textContent = data.name;
     var provInfo = data._providerCount > 1 ? ' [' + data._providerCount + ' AI verified]' : (data._provider ? ' [' + data._provider + ']' : '');
-    toast('Forensic audit complete — ' + data.name + provInfo, 'ok');
+    var t1Tag = '';
+    if (data._cacheHit) t1Tag += ' | cached';
+    if (data._isRevision) t1Tag += ' | REVISION';
+    if (data._needsReview) t1Tag += ' | NEEDS REVIEW';
+    var t1Prefix = data._cacheHit ? 'Cached audit returned' : 'Forensic audit complete';
+    toast(t1Prefix + ' - ' + data.name + provInfo + t1Tag, data._needsReview ? 'warn' : 'ok');
 
     // Reset file for next upload
     _file=null; _fileBase64=null; _fileText=null; _fileReady=false;
@@ -6891,22 +6913,57 @@ function generateProposal(d) {
 
 </script><script>
 async function _extractViaBackend(){
-  if(!_file) throw new Error('No statement file to analyze.');
-  if(typeof setProgress==='function') setProgress(30,'Uploading to secure server-side AI engine...');
+  // Tier 1: statement date is required by the backend
+  var sd=document.getElementById('m-stmt-date');
+  var stmtDate=(sd&&sd.value)?sd.value.trim():'';
+  if(!stmtDate) throw new Error('Statement Date is required. Pick the statement month before running the audit.');
+
+  // Tier 1: collect file(s) - multi-file picker preferred, fall back to single _file
+  var fileInput=document.getElementById('file-inp');
+  var fileList=(fileInput&&fileInput.files&&fileInput.files.length)?Array.from(fileInput.files):(_file?[_file]:[]);
+  if(!fileList.length) throw new Error('No statement file to analyze.');
+
+  if(typeof setProgress==='function') setProgress(30,'Uploading '+fileList.length+' file'+(fileList.length>1?'s':'')+' to secure server-side AI engine...');
+
   var fd=new FormData();
-  fd.append('file',_file,(_file&&_file.name)||'statement');
+  for(var i=0;i<fileList.length;i++){ fd.append('files',fileList[i],fileList[i].name||('page_'+(i+1))); }
+  fd.append('statement_date',stmtDate);
+  fd.append('uploaded_via','command_center');
+  var cc=document.getElementById('m-consent');
+  fd.append('consent',(cc&&cc.checked)?'true':'false');
+
   var mn=document.getElementById('m-name'); var mp=document.getElementById('m-proc');
   if(mn&&mn.value) fd.append('merchant_name',mn.value);
   if(mp&&mp.value) fd.append('processor',mp.value);
+
   var h={}; if(typeof _jwt!=='undefined'&&_jwt) h['Authorization']='Bearer '+_jwt;
-  if(typeof setProgress==='function') setProgress(55,'Running 4 AI providers server-side...');
+  if(typeof setProgress==='function') setProgress(55,'Running AI providers server-side...');
+
   var resp=await fetch(API_BASE+'/api/audit/run',{method:'POST',headers:h,body:fd});
-  if(!resp.ok){var eb={};try{eb=await resp.json();}catch(e){} throw new Error('Audit failed: '+(eb.detail||('HTTP '+resp.status)));}
+  if(!resp.ok){ var eb={}; try{eb=await resp.json();}catch(e){} throw new Error('Audit failed: '+(eb.detail||('HTTP '+resp.status))); }
+
   var out=await resp.json(); var d=out.data||{};
+  // Surface Tier 1 metadata for downstream rendering
+  d._cacheHit=!!out.cache_hit;
+  d._isRevision=!!out.is_revision;
+  d._needsReview=!!out.needs_review;
+  d._auditId=out.audit_id;
+  d._merchantId=out.merchant_id;
   d._providerCount=d._providerCount||out.provider_count||1;
   if(!d._provider) d._provider=(d._providers&&d._providers.length)?d._providers.join(' + '):'AI Consensus';
   if(!d._confidence) d._confidence=out.confidence||d._confidence;
-  if(typeof setProgress==='function') setProgress(80,'Consensus received...');
+  if(typeof out.agree_pct!=='undefined') d._agreePct=out.agree_pct;
+  // Tier 1: AI Cross-Verification Confidence label + status flags
+  if(!d._consensusNote){
+    var lbl='AI Cross-Verification Confidence';
+    var conf=d._confidence||'single';
+    var pct=(typeof d._agreePct!=='undefined' && d._agreePct!==null)?(' - '+d._agreePct+'% agreement'):'';
+    d._consensusNote = lbl + ': ' + conf.toUpperCase() + pct;
+    if(d._cacheHit) d._consensusNote += ' - CACHED';
+    if(d._isRevision) d._consensusNote += ' - REVISION';
+    if(d._needsReview) d._consensusNote += ' - NEEDS REVIEW';
+  }
+  if(typeof setProgress==='function') setProgress(80, out.cache_hit?'Identical statement detected - using cached result...':'Consensus received...');
   return d;
 }
 </script>
