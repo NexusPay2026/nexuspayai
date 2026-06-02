@@ -24,6 +24,28 @@ from app.services import audit_log
 
 router = APIRouter()
 
+
+import re as _re_t1d
+def _normalize_month(s):
+    """Convert MM/YYYY, 'February 2026', or YYYY-MM string to YYYY-MM. Returns '' if cannot parse."""
+    s = (s or "").strip()
+    if not s: return ""
+    if _re_t1d.match(r"^\d{4}-\d{2}$", s): return s
+    parts = s.split("/")
+    if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+        mm, yyyy = parts[0], parts[1]
+        if len(yyyy) == 4 and 1 <= int(mm) <= 12:
+            return f"{yyyy}-{mm.zfill(2)}"
+    _months = {"jan":1,"feb":2,"mar":3,"apr":4,"may":5,"jun":6,
+               "jul":7,"aug":8,"sep":9,"oct":10,"nov":11,"dec":12}
+    m = _re_t1d.match(r"^([A-Za-z]+)\s+(\d{4})$", s)
+    if m:
+        mname = m.group(1)[:3].lower()
+        if mname in _months:
+            return f"{m.group(2)}-{_months[mname]:02d}"
+    return ""
+
+
 ALLOWED_TYPES = {
     "application/pdf", "image/png", "image/jpeg", "image/jpg", "image/webp",
     "image/tiff", "image/heic", "text/csv", "text/plain",
@@ -53,7 +75,7 @@ async def run_audit(
     request: Request,
     files: Optional[List[UploadFile]] = File(None),
     file: Optional[UploadFile] = File(None),   # legacy single-file field (back-compat)
-    statement_date: str = Form(...),     # REQUIRED - statement period
+    statement_date: str = Form(""),       # Optional - auto-derived from extracted statement_month if blank
     merchant_name: str = Form(""),
     processor: str = Form(""),
     uploaded_via: str = Form("command_center"),
@@ -69,10 +91,8 @@ async def run_audit(
     # Merge legacy single-file + new multi-file inputs
     files = (files or []) + ([file] if file else [])
 
-    # 1) Required statement date (Tier 1: mandatory on every upload)
+    # 1) Statement date - manual entry takes precedence; auto-derive below if blank
     statement_date = (statement_date or "").strip()
-    if not statement_date:
-        raise HTTPException(status_code=400, detail="statement_date is required.")
 
     if not files:
         raise HTTPException(status_code=400, detail="At least one file is required.")
@@ -120,11 +140,13 @@ async def run_audit(
             detail={"reason": "identical file hash", "page_count": page_count},
             commit=True,
         )
+        _cached = prior_job.consensus_data or {}
         return {
             "audit_id": prior_job.id,
             "merchant_id": prior_job.merchant_id,
             "status": "complete",
             "cache_hit": True,
+            "statement_date": _normalize_month(_cached.get("statement_month", "")),
             "confidence": prior_job.confidence,
             "agree_pct": prior_job.agree_pct,
             "data": prior_job.consensus_data,
@@ -174,6 +196,10 @@ async def run_audit(
     try:
         # 6) Analyze. Single file / multi-page PDF = full analysis.
         result = await run_audit_all_providers(primary_b64, primary_media)
+
+        # Tier 1d: auto-derive statement_date from extracted statement_month if blank
+        if not statement_date:
+            statement_date = _normalize_month(result.get("statement_month", ""))
 
         # Multi-PHOTO statements: stored+grouped, but flag analysis for review
         # (true multi-image vision consensus is Tier 1b).
@@ -297,6 +323,7 @@ async def run_audit(
             "merchant_id": merchant.id,
             "status": "complete",
             "cache_hit": False,
+            "statement_date": statement_date,
             "confidence": result.get("_confidence"),
             "agree_pct": agree_pct,
             "provider_count": merchant.provider_count,
