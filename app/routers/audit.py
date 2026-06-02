@@ -94,6 +94,13 @@ async def run_audit(
     # 1) Statement date - manual entry takes precedence; auto-derive below if blank
     statement_date = (statement_date or "").strip()
 
+    # 1b) Consent is MANDATORY (chain-of-custody / subprocessor disclosure)
+    if not consent:
+        raise HTTPException(
+            status_code=400,
+            detail="Consent is required: you must check the consent box to authorize storage and processing of this statement."
+        )
+
     if not files:
         raise HTTPException(status_code=400, detail="At least one file is required.")
 
