@@ -40,7 +40,7 @@ class Settings:
     # To upgrade a model, set the matching env var in Render — no code change.
     ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
     OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o")
-    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     GROK_MODEL: str = os.getenv("GROK_MODEL", "grok-3")
     # Optional vision-capable Grok model for image statements (leave blank to skip Grok on images)
     GROK_VISION_MODEL: str = os.getenv("GROK_VISION_MODEL", "")
