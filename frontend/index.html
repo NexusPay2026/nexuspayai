@@ -3163,7 +3163,7 @@ function buildAuditView() {
         '<div class="section-hdr"><div class="sh-title">Statement Period &amp; Consent <span style="color:var(--dn)">*</span></div>' +
         '<div class="sh-sub">Required - needed for accurate dedup and revision tracking</div></div>' +
         '<div class="fgrid-2" style="margin-bottom:14px">' +
-          '<div class="field"><label>Statement Date (Month) *</label><input type="month" id="m-stmt-date" required/></div>' +
+          '<div class="field"><label>Statement Date (Month) - auto-detected if blank</label><input type="month" id="m-stmt-date"/></div>' +
           '<div class="field" style="display:flex;align-items:center">' +
             '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-weight:normal;line-height:1.5">' +
               '<input type="checkbox" id="m-consent" style="margin-top:3px"/>' +
@@ -6916,7 +6916,11 @@ async function _extractViaBackend(){
   // Tier 1: statement date is required by the backend
   var sd=document.getElementById('m-stmt-date');
   var stmtDate=(sd&&sd.value)?sd.value.trim():'';
-  if(!stmtDate) throw new Error('Statement Date is required. Pick the statement month before running the audit.');
+  // Tier 1d: backend auto-derives statement_date from extraction if blank; no client-side block.
+
+  // Tier 1e: consent is mandatory
+  var _ccEl=document.getElementById('m-consent');
+  if(!_ccEl||!_ccEl.checked) throw new Error('Consent is required. Please tick the consent checkbox to authorize storage and processing of this statement.');
 
   // Tier 1: collect file(s) - multi-file picker preferred, fall back to single _file
   var fileInput=document.getElementById('file-inp');
@@ -6953,6 +6957,11 @@ async function _extractViaBackend(){
   if(!d._provider) d._provider=(d._providers&&d._providers.length)?d._providers.join(' + '):'AI Consensus';
   if(!d._confidence) d._confidence=out.confidence||d._confidence;
   if(typeof out.agree_pct!=='undefined') d._agreePct=out.agree_pct;
+  // Tier 1d: populate the date field with the backend-derived date (only if user left it blank)
+  if (out.statement_date) {
+    var _sdEl = document.getElementById('m-stmt-date');
+    if (_sdEl && !_sdEl.value) { _sdEl.value = out.statement_date; }
+  }
   // Tier 1: AI Cross-Verification Confidence label + status flags
   if(!d._consensusNote){
     var lbl='AI Cross-Verification Confidence';
