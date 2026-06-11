@@ -1,5 +1,5 @@
 """
-SQLAlchemy ORM models — all tables for the unified backend.
+SQLAlchemy ORM models - all tables for the unified backend.
 Postgres stores metadata. R2 stores files/objects.
 """
 
@@ -21,9 +21,9 @@ def _now():
     return datetime.now(timezone.utc)
 
 
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 #  USERS
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 class User(Base):
     __tablename__ = "users"
 
@@ -48,9 +48,9 @@ class User(Base):
     merchants = relationship("Merchant", back_populates="owner", lazy="selectin")
 
 
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 #  MERCHANTS
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 class Merchant(Base):
     __tablename__ = "merchants"
 
@@ -86,10 +86,24 @@ class Merchant(Base):
     statement_r2_key = Column(String(500), nullable=True)
     report_r2_key = Column(String(500), nullable=True)
 
+    # -- Tier 1: data integrity / grouping / compliance (additive) --
+    statement_date = Column(String(20), default="")        # required statement period, e.g. "2026-02"
+    file_hash = Column(String(64), nullable=True, index=True)  # sha256 of the combined statement
+    page_count = Column(Integer, default=0)                # number of files/pages in the statement
+    merchant_number = Column(String(60), nullable=True, index=True)  # MID from statement (identity key)
+    revision_group = Column(String, nullable=True, index=True)  # groups revisions of the same statement
+    is_revision = Column(Boolean, default=False)           # flagged: same MID+date, different bytes
+    agree_pct = Column(Integer, default=0)                 # cross-verification agreement %
+    provider_count = Column(Integer, default=0)            # how many AI providers returned
+    providers = Column(JSON, default=list)                 # which providers returned, e.g. ["claude","grok"]
+    files = Column(JSON, default=list)                     # [{r2_key, filename, sha256, page, content_type}]
+    uploaded_via = Column(String(40), default="command_center")  # command_center | paycalculator | portal
+    consent_at = Column(DateTime(timezone=True), nullable=True)   # subprocessor/storage consent timestamp
 
-# ═══════════════════════════════════════════════════════════════
+
+# ===============================================================
 #  VISITORS / LEADS  (from landing page + website contact form)
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 class Visitor(Base):
     __tablename__ = "visitors"
 
@@ -114,9 +128,9 @@ class Visitor(Base):
     created_at = Column(DateTime(timezone=True), default=_now)
 
 
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 #  AUDIT JOBS  (server-side AI orchestration tracking)
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 class AuditJob(Base):
     __tablename__ = "audit_jobs"
 
@@ -130,13 +144,40 @@ class AuditJob(Base):
     error_message = Column(Text, nullable=True)
     statement_r2_key = Column(String(500), nullable=True)
     report_r2_key = Column(String(500), nullable=True)
+    # -- Tier 1 additive fields --
+    file_hash = Column(String(64), nullable=True, index=True)
+    page_count = Column(Integer, default=0)
+    agree_pct = Column(Integer, default=0)
+    files = Column(JSON, default=list)
+    cache_hit = Column(Boolean, default=False)  # True if returned from an identical prior upload
     created_at = Column(DateTime(timezone=True), default=_now)
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
 
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
+#  AUDIT LOG  (append-only - SOC 2 evidence / chain of custody)
+#  Convention: INSERT only. No code path updates or deletes rows.
+# ===============================================================
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    ts = Column(DateTime(timezone=True), default=_now, index=True)
+    actor_id = Column(String, nullable=True)
+    actor_email = Column(String(320), default="")
+    actor_role = Column(String(20), default="")
+    action = Column(String(40), nullable=False, index=True)
+    entity_type = Column(String(40), default="")
+    entity_id = Column(String, nullable=True, index=True)
+    file_hash = Column(String(64), nullable=True, index=True)
+    ip_address = Column(String(45), nullable=True)
+    user_agent = Column(Text, nullable=True)
+    detail = Column(JSON, default=dict)
+
+
+# ===============================================================
 #  INDEXES
-# ═══════════════════════════════════════════════════════════════
+# ===============================================================
 Index("ix_merchants_owner", Merchant.owner_email)
 Index("ix_visitors_created", Visitor.created_at.desc())
 Index("ix_audit_jobs_user", AuditJob.user_id)
@@ -172,21 +213,21 @@ class Quote(Base):
     amex_volume = Column(Float, default=0)
     use_gateway = Column(Boolean, default=False)
 
-    # Calculated results — Beacon
+    # Calculated results - Beacon
     beacon_trad_residual = Column(Float, default=0)
     beacon_trad_margin = Column(Float, default=0)
     beacon_flex_residual = Column(Float, default=0)
     beacon_flex_margin = Column(Float, default=0)
 
-    # Calculated results — North  (added Apr 2026, backward-compatible default=0)
+    # Calculated results - North  (added Apr 2026, backward-compatible default=0)
     north_residual = Column(Float, default=0)
     north_margin = Column(Float, default=0)
 
-    # Calculated results — Kurv / EMS  (added Apr 2026, backward-compatible default=0)
+    # Calculated results - Kurv / EMS  (added Apr 2026, backward-compatible default=0)
     kurv_residual = Column(Float, default=0)
     kurv_margin = Column(Float, default=0)
 
-    # Calculated results — Maverick
+    # Calculated results - Maverick
     maverick_residual = Column(Float, default=0)
     maverick_tnr = Column(Float, default=0)
     maverick_risk = Column(String, default="low")

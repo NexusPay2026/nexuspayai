@@ -192,6 +192,7 @@ async def _call_openai(file_b64: str, media_type: str, pdf_text: str) -> Optiona
                 "model": settings.OPENAI_MODEL,
                 "max_tokens": settings.AI_MAX_TOKENS,
                 "temperature": settings.AI_TEMPERATURE,
+                "response_format": {"type": "json_object"},
                 "messages": [{"role": "user", "content": msg_content}],
             },
         )
