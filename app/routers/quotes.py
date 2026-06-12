@@ -16,7 +16,7 @@ from app.services.quote_pdf import generate_quote_pdf, upload_quote_pdf
 
 router = APIRouter()
 
-ALLOWED_ROLES = ["admin", "employee"]
+ALLOWED_ROLES = ["admin", "employee", "ic"]
 
 
 def require_internal(user: dict):
@@ -107,7 +107,7 @@ async def list_quotes(
     if status:
         query = query.where(Quote.status == status)
 
-    if user.get("role") == "employee":
+    if user.get("role") in ("employee", "ic"):
         query = query.where(Quote.created_by == user["sub"])
 
     query = query.offset(skip).limit(limit)
@@ -133,7 +133,7 @@ async def get_quote(
     if not quote:
         raise HTTPException(status_code=404, detail="Quote not found")
 
-    if user.get("role") == "employee" and quote.created_by != user["sub"]:
+    if user.get("role") in ("employee", "ic") and quote.created_by != user["sub"]:
         raise HTTPException(status_code=403, detail="Access denied")
 
     return _to_response(quote)

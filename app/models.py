@@ -240,3 +240,16 @@ class Quote(Base):
     notes = Column(Text, default="")
     status = Column(String, default="draft")
     pdf_url = Column(String, default="")
+
+# -- Exclusion list: people who must never be onboarded (admin-editable) --
+import uuid as _uuid_excl
+from sqlalchemy.sql import func as _func_excl
+
+class Exclusion(Base):
+    __tablename__ = "exclusions"
+    id = Column(String, primary_key=True, default=lambda: _uuid_excl.uuid4().hex)
+    name = Column(String(120), default="")
+    email = Column(String(320), default="")
+    reason = Column(Text, default="")
+    added_by = Column(String(320), default="")
+    created_at = Column(DateTime(timezone=True), server_default=_func_excl.now())

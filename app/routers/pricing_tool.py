@@ -1,4 +1,4 @@
-﻿"""
+"""
 Pricing Tool API â€” Multi-AI Statement Extraction + Proposal Generation
 All 4 providers (Claude, GPT-4o, Gemini, Grok) run in PARALLEL.
 Results merged via consensus scoring. Files stored to R2, metadata to Postgres.
@@ -414,7 +414,7 @@ async def _call_proposal(prompt: str) -> str:
 
 @router.post("/extract")
 async def extract_statement(req: ExtractRequest, user=Depends(get_current_user)):
-    if user.get("role") not in ("admin", "employee"):
+    if user.get("role") not in ("admin", "employee", "ic"):
         raise HTTPException(403, "Employee or admin access required")
 
     media_type = req.resolved_media_type()
@@ -473,7 +473,7 @@ async def extract_statement(req: ExtractRequest, user=Depends(get_current_user))
 
 @router.post("/proposal")
 async def generate_proposal(req: ProposalRequest, user=Depends(get_current_user)):
-    if user.get("role") not in ("admin", "employee"):
+    if user.get("role") not in ("admin", "employee", "ic"):
         raise HTTPException(403, "Employee or admin access required")
     prompt = f"""Write a merchant pricing proposal for NexusPay (veteran-owned). Clean text only, no markdown.
 Merchant: {req.business_name}

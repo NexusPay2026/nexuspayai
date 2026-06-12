@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database import get_db
-from app.models import User
+from app.models import User, Exclusion
 from app.schemas import UserCreate, UserUpdate, UserResponse, ResetPasswordRequest
 from app.services.auth_service import (
     hash_password, get_current_user, require_role,
@@ -48,6 +48,19 @@ async def create_user(
     result = await db.execute(select(User).where(User.email == email))
     if result.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Email already registered")
+
+    # Role must be one of the platform roles
+    VALID_ROLES = ("admin", "employee", "ic", "client", "user", "demo")
+    if req.role not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail="Invalid role. Must be one of: " + ", ".join(VALID_ROLES))
+
+    # Exclusion list enforcement (admin-editable via /api/exclusions)
+    excl_result = await db.execute(select(Exclusion))
+    for entry in excl_result.scalars().all():
+        if entry.email and entry.email == email:
+            raise HTTPException(status_code=403, detail="This person is on the exclusion list and cannot be onboarded.")
+        if entry.name and entry.name.lower() == req.name.strip().lower():
+            raise HTTPException(status_code=403, detail="This person is on the exclusion list and cannot be onboarded.")
 
     new_user = User(
         email=email,
