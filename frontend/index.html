@@ -1377,7 +1377,7 @@ html,body{height:100%;overflow:hidden;background:var(--void);color:var(--t1);fon
 
       <!-- Secure badge -->
       <div style="display:flex;align-items:center;justify-content:center;gap:6px;margin-top:12px;font-family:var(--mono);font-size:8px;color:var(--t4)">
-        <span>🔒</span> PCI-DSS Compliant · 256-bit Encryption · Processed by NexusPay Services
+        <span>🔒</span> Built with PCI-DSS-aligned practices · 256-bit Encryption · Processed by NexusPay Services
       </div>
     </div>
 
@@ -2343,7 +2343,7 @@ function pciNotice() {
   return '<div style="margin-bottom:10px;padding:10px 14px;background:rgba(64,144,240,.06);border:1px solid rgba(64,144,240,.2);border-radius:4px;display:flex;align-items:flex-start;gap:10px">' +
     '<div style="font-size:16px;flex-shrink:0">🔒</div>' +
     '<div>' +
-      '<div style="font-size:10px;font-weight:700;color:var(--info);margin-bottom:3px">PCI DSS v4.0.1 COMPLIANT SANDBOX</div>' +
+      '<div style="font-size:10px;font-weight:700;color:var(--info);margin-bottom:3px">PCI DSS v4.0.1-ALIGNED SANDBOX</div>' +
       '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);line-height:1.8">' +
         'This is a <strong style="color:var(--info)">read-only demonstration</strong> environment. ' +
         'All merchant data is <strong style="color:var(--lime)">fictional</strong> and does not represent real businesses. ' +
@@ -4876,7 +4876,7 @@ function buildSettingsView() {
               (isAdmin()    ? '★ Admin: Delete · Clear portfolio · Manage users · Override duplicates' :
                isEmployee() ? '◈ Employee: Edit all data · Run audits · Upload · Download · No delete' :
                isClient()   ? '◉ Client: View assigned merchants · Upload own statements · Download PDFs' :
-               isDemoUser() ? '◌ Demo: Sample data sandbox only · PCI DSS v4.0.1 compliant' :
+               isDemoUser() ? '◌ Demo: Sample data sandbox only · PCI DSS v4.0.1-aligned' :
                               '○ User: Upload own statements · View own data · Download PDFs') +
             '</div>' +
             (canManageUsers() ? '<button class="btn sm" style="margin-right:6px" onclick="nav(\'users\')">☷ Manage Users</button>' : '') +
@@ -5574,9 +5574,9 @@ var LEGAL_CONTENT = {
       '<strong>Contact:</strong> admin@nexuspayservices.com'
   },
   pci: {
-    title:'PCI DSS v4.0.1 Compliance',
-    body:'<strong>PCI DSS v4.0.1 Compliance Statement</strong><br>Last updated: March 2026<br><br>' +
-      'NexusPay Intelligence is designed and operated in accordance with the Payment Card Industry Data Security Standard (PCI DSS) v4.0.1.<br><br>' +
+    title:'PCI DSS v4.0.1 Alignment',
+    body:'<strong>PCI DSS v4.0.1 Alignment Statement</strong><br>Last updated: March 2026<br><br>' +
+      'NexusPay Intelligence is built with practices aligned to the Payment Card Industry Data Security Standard (PCI DSS) v4.0.1.<br><br>' +
       '<strong>Applicable Requirements:</strong><br>' +
       '• <strong>Req 3.3:</strong> Sensitive Authentication Data (SAD) is not retained after authorization<br>' +
       '• <strong>Req 3.4:</strong> Primary Account Numbers (PAN) are rendered unreadable when displayed — masked or omitted in all views<br>' +
