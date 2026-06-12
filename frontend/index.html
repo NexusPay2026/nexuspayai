@@ -4024,6 +4024,24 @@ function renderAuditResults(d) {
     })() :
     (d._provider ? '<div style="padding:6px 12px;background:rgba(184,240,64,.04);border:1px solid rgba(184,240,64,.12);border-radius:4px;margin-bottom:10px;font-family:var(--mono);font-size:9px;color:var(--t3)">Analyzed by ' + esc(d._provider) + (d._consensusNote ? ' · ' + esc(d._consensusNote) : '') + '</div>' : '')
     ) +
+    // ── PER-PROVIDER RESULT CARDS ──────────────────────────────
+    ((d._providerResults && d._providerResults.length) ? (function() {
+      var cards = d._providerResults.map(function(pr) {
+        var outlier = pr.confidence === 'outlier';
+        var pc = pr.provider==='Claude'?'var(--lime)':pr.provider==='GPT-4o'?'var(--up)':pr.provider==='Grok'?'var(--purple)':'var(--info)';
+        var bc = outlier ? 'rgba(224,144,32,.35)' : 'rgba(255,255,255,.08)';
+        return '<div style="flex:1;min-width:160px;padding:8px 10px;background:rgba(255,255,255,.02);border:1px solid '+bc+';border-radius:4px">' +
+          '<div style="display:flex;align-items:center;gap:5px;margin-bottom:4px">' +
+            '<span style="font-family:var(--mono);font-size:9px;font-weight:700;padding:1px 5px;border-radius:2px;border:1px solid '+pc+';color:'+pc+'">'+esc(pr.provider||'?')+'</span>' +
+            (outlier ? '<span class="dup-badge">OUTLIER</span>' : '') +
+          '</div>' +
+          '<div style="font-size:10px;font-weight:600">'+esc(pr.name||'—')+'</div>' +
+          '<div style="font-family:var(--mono);font-size:8px;color:var(--t3);margin-bottom:4px">'+esc(pr.processor||'—')+'</div>' +
+          '<div style="font-family:var(--mono);font-size:9px;color:var(--t2)">Vol '+fmtK(pr.monthly_volume||0)+' · Fees '+fmtD(pr.total_fees||0)+' · '+fmtP(pr.effective_rate||0)+'</div>' +
+        '</div>';
+      }).join('');
+      return '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">' + cards + '</div>';
+    })() : '') +
     // Banner
     '<div class="panel accent-border" style="margin-bottom:10px">' +
       '<div class="ph" style="background:linear-gradient(135deg,rgba(184,240,64,.04),transparent)">' +
@@ -6954,6 +6972,7 @@ async function _extractViaBackend(){
   d._auditId=out.audit_id;
   d._merchantId=out.merchant_id;
   d._providerCount=d._providerCount||out.provider_count||1;
+  d._providerResults=Array.isArray(out.provider_results)?out.provider_results:[];
   if(!d._provider) d._provider=(d._providers&&d._providers.length)?d._providers.join(' + '):'AI Consensus';
   if(!d._confidence) d._confidence=out.confidence||d._confidence;
   if(typeof out.agree_pct!=='undefined') d._agreePct=out.agree_pct;

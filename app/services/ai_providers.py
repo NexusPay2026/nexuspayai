@@ -311,6 +311,26 @@ def provider_status() -> Dict[str, bool]:
     return settings.ai_provider_status
 
 
+def _provider_summary(r: Dict) -> Dict[str, Any]:
+    """Per-provider extraction snapshot kept alongside the consensus."""
+    vol = r.get("monthly_volume")
+    fees = r.get("total_fees")
+    eff = r.get("effective_rate")
+    if eff is None and vol and fees:
+        try:
+            eff = round((float(fees) / float(vol)) * 100, 4)
+        except (TypeError, ValueError, ZeroDivisionError):
+            eff = None
+    return {
+        "provider": r.get("_provider"),
+        "name": r.get("name"),
+        "processor": r.get("processor"),
+        "monthly_volume": vol,
+        "total_fees": fees,
+        "effective_rate": eff,
+    }
+
+
 async def run_audit_all_providers(file_b64: str, media_type: str) -> Dict[str, Any]:
     """
     Run extraction across all configured AI providers in parallel and return
@@ -363,10 +383,12 @@ async def run_audit_all_providers(file_b64: str, media_type: str) -> Dict[str, A
         r["_providers"] = [r.get("_provider")]
         r["_confidence"] = "single"
         r["_errors"] = errors           # <-- now surfaced, not swallowed
+        r["_provider_results"] = [_provider_summary(r)]
         return r
 
     consensus = _build_consensus(results)
     consensus["_errors"] = errors       # <-- surfaced even on a successful multi-run
+    consensus["_provider_results"] = [_provider_summary(r) for r in results]
     return consensus
 
 

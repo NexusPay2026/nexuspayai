@@ -69,6 +69,38 @@ def _client_meta(request: Request):
     return ip, ua
 
 
+_CONSENSUS_CHECK_FIELDS = ("monthly_volume", "total_fees", "effective_rate")
+
+
+def _build_provider_results(result: dict) -> List[dict]:
+    """Per-provider snapshots with a match/outlier flag vs the consensus values."""
+    out = []
+    for p in result.get("_provider_results", []) or []:
+        confidence = "match"
+        for field in _CONSENSUS_CHECK_FIELDS:
+            cv, pv = result.get(field), p.get(field)
+            if cv is None and pv is None:
+                continue
+            try:
+                cv, pv = float(cv), float(pv)
+            except (TypeError, ValueError):
+                confidence = "outlier"
+                break
+            if abs(pv - cv) > abs(cv) * 0.05:
+                confidence = "outlier"
+                break
+        out.append({
+            "provider": p.get("provider"),
+            "name": p.get("name"),
+            "processor": p.get("processor"),
+            "monthly_volume": p.get("monthly_volume"),
+            "total_fees": p.get("total_fees"),
+            "effective_rate": p.get("effective_rate"),
+            "confidence": confidence,
+        })
+    return out
+
+
 # -- POST /api/audit/run -------------------------------------
 @router.post("/audit/run")
 async def run_audit(
@@ -148,6 +180,9 @@ async def run_audit(
             commit=True,
         )
         _cached = prior_job.consensus_data or {}
+        _cached_pr = prior_job.provider_results
+        if not isinstance(_cached_pr, list):  # legacy rows stored {} via the old column default
+            _cached_pr = _build_provider_results(_cached)
         return {
             "audit_id": prior_job.id,
             "merchant_id": prior_job.merchant_id,
@@ -156,6 +191,7 @@ async def run_audit(
             "statement_date": _normalize_month(_cached.get("statement_month", "")),
             "confidence": prior_job.confidence,
             "agree_pct": prior_job.agree_pct,
+            "provider_results": _cached_pr,
             "data": prior_job.consensus_data,
         }
 
@@ -241,6 +277,8 @@ async def run_audit(
         mn = str(result.get("merchant_number", "") or "").strip()
         agree_pct = int(result.get("_agreePct", 0) or 0)
         providers = result.get("_providers", []) or []
+        # Per-provider snapshots flagged against consensus (after derived rates above)
+        provider_results = _build_provider_results(result)
 
         # 7) REVISION CHECK - same MID + statement_date, different bytes => flag + keep
         revision_group = None
@@ -310,6 +348,7 @@ async def run_audit(
         job.merchant_id = merchant.id
         job.status = "complete"
         job.consensus_data = result
+        job.provider_results = provider_results
         job.confidence = result.get("_confidence", "single")
         job.agree_pct = agree_pct
         job.cache_hit = False
@@ -334,6 +373,7 @@ async def run_audit(
             "confidence": result.get("_confidence"),
             "agree_pct": agree_pct,
             "provider_count": merchant.provider_count,
+            "provider_results": provider_results,
             "is_revision": is_revision,
             "needs_review": bool(result.get("_needs_review")),
             "data": result,
