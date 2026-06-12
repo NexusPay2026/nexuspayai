@@ -42,13 +42,14 @@ Extraction rules:
 - Capture EVERY fee line item, including small ones (PCI, regulatory, statement, batch, network access, dues & assessments, downgrades).
 - Re-derive any value you can compute from others, and VERIFY your arithmetic before reporting it (e.g., effective_rate = total_fees / monthly_volume * 100). Internally double-check each calculation; report only verified figures.
 - If a value genuinely does not appear and cannot be derived, use null. Do not invent numbers.
+- EXCEPTION - "name" and "processor" must NEVER be null or empty. Every statement identifies the merchant and the processor somewhere. If neither is explicitly labeled, use your best evidence candidate: the DBA line, the merchant header, the address block, the remittance/logo block, or the entity the statement is addressed to. Pick the strongest candidate present rather than returning null.
 
 Return ONLY a valid JSON object. No markdown fences, no preamble, no trailing text. Start with { and end with }.
 
 Schema:
 {
-  "name": "<exact business name>",
-  "processor": "<processor/acquirer name>",
+  "name": "<exact business name - NEVER null; if unlabeled, use best evidence candidate (DBA line, merchant header, address block)>",
+  "processor": "<processor/acquirer name - NEVER null; if unlabeled, use best evidence candidate (logo, header, footer, remittance block)>",
   "statement_month": "<MM/YYYY>",
   "monthly_volume": <float>,
   "total_fees": <float>,

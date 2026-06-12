@@ -77,6 +77,7 @@ async def run_audit(
     file: Optional[UploadFile] = File(None),   # legacy single-file field (back-compat)
     statement_date: str = Form(""),       # Optional - auto-derived from extracted statement_month if blank
     merchant_name: str = Form(""),
+    business_name: str = Form(""),        # alias for merchant_name
     processor: str = Form(""),
     uploaded_via: str = Form("command_center"),
     consent: bool = Form(False),
@@ -221,10 +222,13 @@ async def run_audit(
             result["findings"] = findings
             result["_needs_review"] = True
 
-        if merchant_name:
-            result["name"] = merchant_name
-        if processor:
-            result["processor"] = processor
+        # Form values are a fallback only - AI-extracted values win when present
+        form_name = (business_name or merchant_name or "").strip()
+        if not str(result.get("name") or "").strip() and form_name:
+            result["name"] = form_name
+        form_processor = (processor or "").strip()
+        if not str(result.get("processor") or "").strip() and form_processor:
+            result["processor"] = form_processor
 
         # Derived rates
         vol = result.get("monthly_volume", 0)
@@ -267,8 +271,8 @@ async def run_audit(
 
         # 8) Persist merchant with all Tier 1 fields
         merchant = Merchant(
-            name=result.get("name", merchant_name or "Unknown"),
-            processor=result.get("processor", processor or ""),
+            name=result.get("name") or form_name or "Unknown",
+            processor=result.get("processor") or form_processor or "",
             statement_month=result.get("statement_month", ""),
             statement_date=statement_date,
             monthly_volume=result.get("monthly_volume", 0),
