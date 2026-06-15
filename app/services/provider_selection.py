@@ -74,17 +74,24 @@ class SponsorProfile:
     configured: bool = False   # True once an admin sets real contract values
 
 
-# PROVISIONAL ratings — Claude's industry-reputation judgment (per Marc's "rate as
-# if this were your unregistered ISO"), NOT read from contracts. `configured` stays
-# False so unconfigured_sponsors() keeps flagging them until they are validated
-# against the signed Schedule A's; replace these numbers from those, then set True.
+# CONTRACT-DERIVED ratings — extracted from each Schedule A + ownership/exit clauses
+# (2026-06-15) and cross-verified against the source documents.
 #   brand_risk: 1 safest .. 5 riskiest      strategic: 1 locked-in .. 5 best ISO path
+# `configured` = contract-grounded AND the agreement is actually EXECUTED. Only Beacon
+# is fully signed; North (DocuSign 0 signatures), Maverick (unsigned Round-1 redline),
+# and Kurv/EMS (Round-3 redline, not final) stay False so unconfigured_sponsors()
+# keeps flagging them until executed.
+#
+# ⚠ NOTE — the live residual splits in app/routers/quotes.py do NOT all match these
+# contracts and must be reconciled: Maverick (quotes.py 90/80/60 vs Schedule A
+# 85/80/50) and Kurv/EMS (quotes.py 80/50 vs EMS 90% Retail / 55% Risk) are wrong.
+# Beacon (75% Trad / 50% Flex) and North (70%) match.
 SPONSOR_PROFILES: Dict[str, SponsorProfile] = {
-    "Beacon Traditional": SponsorProfile("Beacon Traditional", brand_risk=3, strategic=3),
-    "Beacon Flex":        SponsorProfile("Beacon Flex",        brand_risk=3, strategic=3),
-    "North":              SponsorProfile("North",              brand_risk=2, strategic=3),
-    "Kurv / EMS":         SponsorProfile("Kurv / EMS",         brand_risk=3, strategic=3),
-    "Maverick":           SponsorProfile("Maverick",           brand_risk=2, strategic=4),
+    "Beacon Traditional": SponsorProfile("Beacon Traditional", brand_risk=3, strategic=2, configured=True),
+    "Beacon Flex":        SponsorProfile("Beacon Flex",        brand_risk=3, strategic=2, configured=True),
+    "North":              SponsorProfile("North",              brand_risk=4, strategic=2),  # unsigned (DocuSign 0 sigs)
+    "Kurv / EMS":         SponsorProfile("Kurv / EMS",         brand_risk=3, strategic=2),  # EMS Round-3 redline, not final
+    "Maverick":           SponsorProfile("Maverick",           brand_risk=2, strategic=2),  # unsigned Round-1 redline
     # "CardConnect", "Pineapple Payments" — add when contracts are active
 }
 
