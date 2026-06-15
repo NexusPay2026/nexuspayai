@@ -369,6 +369,9 @@ async def run_audit(
                             "page_count": page_count},
                     commit=True,
                 )
+                _ent_pr = (entity_job.provider_results
+                           if entity_job and isinstance(entity_job.provider_results, list)
+                           else _build_provider_results(cached))
                 return {
                     "audit_id": job.id,
                     "merchant_id": entity.id,
@@ -378,6 +381,7 @@ async def run_audit(
                     "statement_date": statement_date,
                     "confidence": job.confidence,
                     "agree_pct": entity.agree_pct,
+                    "provider_results": _ent_pr,
                     "data": cached,
                 }
 
