@@ -297,18 +297,18 @@ async def analyze_quote(
     nt_mg = nt_rev - nt_cost
     nt_res = nt_mg * 0.70
 
-    # Kurv / EMS  (buy: sp=0.0002, au=0.04/0.10high, ba=0.05, mo=5 | split: 80% low/mod, 50% high)
+    # Kurv / EMS  (buy: sp=0.0002, au=0.04/0.10high, ba=0.05, mo=5 | split: Retail 90% / Risk 55% per EMS Round-2 final)
     kv_rev = vol*(mu/100) + tx*au + tx*s.avs_sell + 30*s.batch_sell + s.monthly_sell + s.pci_sell
     kv_au = 0.10 if risk == "high" else 0.04
     kv_cost = vol*0.0002 + tx*kv_au + 30*0.05 + 5
     kv_mg = kv_rev - kv_cost
-    kv_split = 0.50 if risk == "high" else 0.80
+    kv_split = 0.55 if risk == "high" else 0.90  # EMS: Risk 55% / Retail 90% (was 50/80)
     kv_res = kv_mg * kv_split
 
-    # Maverick
-    mv_rates = {"low":(0.0275,0.0002,0.01,0.01,10,5,0.90),
+    # Maverick — splits per signed Schedule A (Round-2 final): Low 85% / Mod 80% / High 50% (was 90/80/60)
+    mv_rates = {"low":(0.0275,0.0002,0.01,0.01,10,5,0.85),
                 "moderate":(0.04,0.0002,0.03,0.025,10,5,0.80),
-                "high":(0.06,0.0035,0.05,0.04,20,5,0.60)}
+                "high":(0.06,0.0035,0.05,0.04,20,5,0.50)}
     rt = mv_rates.get(risk, mv_rates["low"])
     mv_rev = vol*(mu/100) + tx*au + tx*s.avs_sell + 30*s.batch_sell + s.monthly_sell + s.pci_sell
     mv_cost = vol*rt[1] + tx*rt[0] + tx*rt[2] + 30*rt[3] + rt[4] + rt[5]
