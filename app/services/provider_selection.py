@@ -77,10 +77,13 @@ class SponsorProfile:
 # CONTRACT-DERIVED ratings — extracted from each Schedule A + ownership/exit clauses
 # (2026-06-15) and cross-verified against the source documents.
 #   brand_risk: 1 safest .. 5 riskiest      strategic: 1 locked-in .. 5 best ISO path
-# `configured` = contract-grounded AND the agreement is actually EXECUTED. Only Beacon
-# is fully signed; North (DocuSign 0 signatures), Maverick (unsigned Round-1 redline),
-# and Kurv/EMS (Round-3 redline, not final) stay False so unconfigured_sponsors()
-# keeps flagging them until executed.
+# `configured` = contract-grounded AND executed. All four are EXECUTED per Marc
+# (Beacon signed; North 2nd/3rd round; Maverick & Kurv/EMS 3rd-round redlines signed)
+# → configured=True. CAVEAT: the files provided were the redline/working copies
+# (North's PDF is a pre-signature DocuSign delivery with 0 sigs; Maverick/EMS are
+# .docx redlines), so the executed PDFs should still be supplied to confirm the
+# signed Schedule A's — esp. North (signed copy not yet provided) and EMS (its
+# redline lists only selected fee items, not the full Schedule A).
 #
 # ⚠ NOTE — the live residual splits in app/routers/quotes.py do NOT all match these
 # contracts and must be reconciled: Maverick (quotes.py 90/80/60 vs Schedule A
@@ -89,9 +92,9 @@ class SponsorProfile:
 SPONSOR_PROFILES: Dict[str, SponsorProfile] = {
     "Beacon Traditional": SponsorProfile("Beacon Traditional", brand_risk=3, strategic=2, configured=True),
     "Beacon Flex":        SponsorProfile("Beacon Flex",        brand_risk=3, strategic=2, configured=True),
-    "North":              SponsorProfile("North",              brand_risk=4, strategic=2),  # unsigned (DocuSign 0 sigs)
-    "Kurv / EMS":         SponsorProfile("Kurv / EMS",         brand_risk=3, strategic=2),  # EMS Round-3 redline, not final
-    "Maverick":           SponsorProfile("Maverick",           brand_risk=2, strategic=2),  # unsigned Round-1 redline
+    "North":              SponsorProfile("North",              brand_risk=4, strategic=2, configured=True),
+    "Kurv / EMS":         SponsorProfile("Kurv / EMS",         brand_risk=3, strategic=2, configured=True),
+    "Maverick":           SponsorProfile("Maverick",           brand_risk=2, strategic=2, configured=True),
     # "CardConnect", "Pineapple Payments" — add when contracts are active
 }
 
