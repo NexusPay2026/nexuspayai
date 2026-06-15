@@ -74,13 +74,17 @@ class SponsorProfile:
     configured: bool = False   # True once an admin sets real contract values
 
 
-# Neutral placeholders (brand_risk=3, strategic=3, configured=False) until set.
+# PROVISIONAL ratings — Claude's industry-reputation judgment (per Marc's "rate as
+# if this were your unregistered ISO"), NOT read from contracts. `configured` stays
+# False so unconfigured_sponsors() keeps flagging them until they are validated
+# against the signed Schedule A's; replace these numbers from those, then set True.
+#   brand_risk: 1 safest .. 5 riskiest      strategic: 1 locked-in .. 5 best ISO path
 SPONSOR_PROFILES: Dict[str, SponsorProfile] = {
-    "Beacon Traditional": SponsorProfile("Beacon Traditional", 3, 3),
-    "Beacon Flex":        SponsorProfile("Beacon Flex",        3, 3),
-    "North":              SponsorProfile("North",              3, 3),
-    "Kurv / EMS":         SponsorProfile("Kurv / EMS",         3, 3),
-    "Maverick":           SponsorProfile("Maverick",           3, 3),
+    "Beacon Traditional": SponsorProfile("Beacon Traditional", brand_risk=3, strategic=3),
+    "Beacon Flex":        SponsorProfile("Beacon Flex",        brand_risk=3, strategic=3),
+    "North":              SponsorProfile("North",              brand_risk=2, strategic=3),
+    "Kurv / EMS":         SponsorProfile("Kurv / EMS",         brand_risk=3, strategic=3),
+    "Maverick":           SponsorProfile("Maverick",           brand_risk=2, strategic=4),
     # "CardConnect", "Pineapple Payments" — add when contracts are active
 }
 
