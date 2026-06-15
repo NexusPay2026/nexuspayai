@@ -21,11 +21,13 @@ DATA STATUS
 -----------
 - COMPUTED per deal: `payout` (NexusPay residual) and `merchant_cost` come from
   the live pricing calc and are passed in as Candidates.
-- CONTRACT-SPECIFIC (must be set by an admin): each sponsor's `brand_risk` and
-  `strategic` scores in SPONSOR_PROFILES, and REP_SPLIT_PCT. These hold neutral
-  PLACEHOLDERS now; `unconfigured_sponsors()` reports any sponsor not yet set so a
-  recommendation is never silently based on guesses. The engine is intentionally
-  NOT wired into any endpoint until the real values are in place.
+- CONTRACT-SPECIFIC (must come from the signed Schedule A's): each sponsor's
+  `brand_risk` and `strategic` scores in SPONSOR_PROFILES. These hold neutral
+  PLACEHOLDERS now; `unconfigured_sponsors()` reports any sponsor not yet validated
+  so a recommendation is never silently based on guesses. The engine is
+  intentionally NOT wired into any endpoint until the real values are in place.
+- ROLE_SPLITS are the real rep splits (20/30/10); the 16% reserve, draw, and
+  bonuses live in the existing canonical pay-calculator backend (not this repo).
 
 Model note: this is a WEIGHTED blend with merchant cost dominant (not strict
 lexicographic) so a trivially-cheaper option can't always override a far better
@@ -37,15 +39,29 @@ from typing import Dict, List, Optional
 
 
 # ── Weights (Tier 1 dominates). Normalized 0..1 sub-scores are blended. ───────
+# Tier 1 is a JOINT objective (Marc's revised #1): cheapest to the MERCHANT AND
+# highest payout to NexusPay together. The best sponsor is the one whose buy-side
+# economics let us undercut the merchant's cost while keeping the largest residual.
 WEIGHTS = {
-    "merchant_cost": 0.55,   # dominant — least cost to the merchant
-    "payout":        0.25,   # higher NexusPay residual
-    "brand_risk":    0.10,   # lower risk to brand/ISO (amplified on riskier deals)
-    "strategic":     0.10,   # independence / ownership / flexibility / diversity
+    "merchant_cost": 0.38,   # Tier 1a — cheapest to the merchant
+    "payout":        0.37,   # Tier 1b — highest payout to NexusPay (co-dominant)
+    "brand_risk":    0.13,   # Tier 2  — lower risk to brand/ISO (amplified on riskier deals)
+    "strategic":     0.12,   # Tier 3  — independence / ownership / flexibility / diversity
 }
 
-# Staff see only:  nexuspay_residual * REP_SPLIT_PCT
-REP_SPLIT_PCT = 0.40  # PLACEHOLDER — set the real rep split before going live
+# Staff see only ONE number: their commission = their split of the NexusPay residual.
+# Split varies by employment type (Marc, 2026-06-14):
+ROLE_SPLITS = {
+    "w2_commission": 0.20,   # W2, commission-only with a draw
+    "ic":            0.30,   # 1099 independent contractor
+    "w2_salary":     0.10,   # W2, salary + commission
+}
+DEFAULT_REP_SPLIT = 0.20
+# NOTE: the AUTHORITATIVE comp calc — 16% reserve/overhead, the draw, and one-time
+# payout bonuses — already lives in NexusPay's existing pay-calculator backend, which
+# is NOT in this repo. staff_commission() below applies ONLY the role split to the
+# residual; it must be reconciled with (or deferred to) that canonical calc before
+# it drives real pay.
 
 
 @dataclass
@@ -87,9 +103,15 @@ class Ranked:
     configured: bool = False
 
 
-def staff_commission(nexuspay_residual: float, rep_split_pct: float = REP_SPLIT_PCT) -> float:
-    """The single number staff see: their split of the NexusPay residual."""
-    return round((nexuspay_residual or 0) * (rep_split_pct or 0), 2)
+def staff_commission(nexuspay_residual: float, role: str = "w2_commission") -> float:
+    """
+    The single number staff see: their split of the NexusPay residual.
+      role -> split:  w2_commission 20%, ic 30%, w2_salary 10%.
+    Does NOT apply the 16% reserve / draw / one-time bonuses — those belong to the
+    canonical pay-calculator backend and must be reconciled before this drives pay.
+    """
+    split = ROLE_SPLITS.get((role or "").lower(), DEFAULT_REP_SPLIT)
+    return round((nexuspay_residual or 0) * split, 2)
 
 
 def _norm(values: List[float], invert: bool) -> List[float]:
@@ -107,7 +129,7 @@ def _brand_risk_weight(risk_band: str) -> float:
 
 
 def rank_providers(candidates: List[Candidate], risk_band: str = "low",
-                   rep_split_pct: float = REP_SPLIT_PCT) -> List[Ranked]:
+                   role: str = "w2_commission") -> List[Ranked]:
     """
     Rank sponsor programs for a single deal, best first, by NexusPay's criteria.
     Returns Ranked items (ADMIN-ONLY); each carries the rep-split staff number.
@@ -137,7 +159,7 @@ def rank_providers(candidates: List[Candidate], risk_band: str = "low",
             score=round(sum(parts.values()), 4),
             payout=round(c.payout, 2),
             merchant_cost=round(c.merchant_cost, 2),
-            staff_commission=staff_commission(c.payout, rep_split_pct),
+            staff_commission=staff_commission(c.payout, role),
             breakdown=parts,
             configured=bool(prof and prof.configured),
         ))
