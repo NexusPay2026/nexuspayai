@@ -77,24 +77,26 @@ class SponsorProfile:
 # CONTRACT-DERIVED ratings — extracted from each Schedule A + ownership/exit clauses
 # (2026-06-15) and cross-verified against the source documents.
 #   brand_risk: 1 safest .. 5 riskiest      strategic: 1 locked-in .. 5 best ISO path
-# `configured` = contract-grounded AND executed. All four are EXECUTED per Marc
-# (Beacon signed; North 2nd/3rd round; Maverick & Kurv/EMS 3rd-round redlines signed)
-# → configured=True. CAVEAT: the files provided were the redline/working copies
-# (North's PDF is a pre-signature DocuSign delivery with 0 sigs; Maverick/EMS are
-# .docx redlines), so the executed PDFs should still be supplied to confirm the
-# signed Schedule A's — esp. North (signed copy not yet provided) and EMS (its
-# redline lists only selected fee items, not the full Schedule A).
+# `configured` = contract-grounded AND executed (a signed copy is actually on hand).
+# Every file currently in contracts/ is a NEGOTIATION draft, not an executed copy:
+#   Beacon     — appears final ("Custom Comp"); signature page not independently confirmed.
+#   North      — provided PDF is a pre-signature DocuSign delivery (0 captured signatures).
+#   Maverick   — "Cleaned" file is a ROUND 1 counter-redline (FRE 408), blank signature
+#                blocks, "Open Items for Round 2."
+#   Kurv / EMS — Round 3 counter-redline (FRE 408, "for negotiation only"), blank
+#                signature block, awaiting EMS's response to 3 open asks.
+# Marc states these were signed, but the executed copies are NOT among the files
+# provided. Only Beacon left True (pending re-check); the rest are False until a
+# countersigned copy is supplied (or on Marc's explicit instruction to trust).
 #
-# ⚠ NOTE — the live residual splits in app/routers/quotes.py do NOT all match these
-# contracts and must be reconciled: Maverick (quotes.py 90/80/60 vs Schedule A
-# 85/80/50) and Kurv/EMS (quotes.py 80/50 vs EMS 90% Retail / 55% Risk) are wrong.
-# Beacon (75% Trad / 50% Flex) and North (70%) match.
+# ⚠ quotes.py residual splits still don't match: Maverick (90/80/60 vs 85/80/50) and
+# Kurv/EMS (80/50 vs 90/55) are wrong; Beacon (75/50) and North (70) match.
 SPONSOR_PROFILES: Dict[str, SponsorProfile] = {
     "Beacon Traditional": SponsorProfile("Beacon Traditional", brand_risk=3, strategic=2, configured=True),
     "Beacon Flex":        SponsorProfile("Beacon Flex",        brand_risk=3, strategic=2, configured=True),
-    "North":              SponsorProfile("North",              brand_risk=4, strategic=2, configured=True),
-    "Kurv / EMS":         SponsorProfile("Kurv / EMS",         brand_risk=3, strategic=2, configured=True),
-    "Maverick":           SponsorProfile("Maverick",           brand_risk=2, strategic=2, configured=True),
+    "North":              SponsorProfile("North",              brand_risk=4, strategic=2),  # pre-signature PDF (0 sigs)
+    "Kurv / EMS":         SponsorProfile("Kurv / EMS",         brand_risk=3, strategic=2),  # Round-3 redline, unsigned
+    "Maverick":           SponsorProfile("Maverick",           brand_risk=2, strategic=2),  # Round-1 redline, unsigned
     # "CardConnect", "Pineapple Payments" — add when contracts are active
 }
 
