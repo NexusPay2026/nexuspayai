@@ -4,10 +4,9 @@ All 4 providers (Claude, GPT-4o, Gemini, Grok) run in PARALLEL.
 Results merged via consensus scoring. Files stored to R2, metadata to Postgres.
 Employee/Admin only.
 """
-import json, os, asyncio, base64
+import os, asyncio, base64
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
-from collections import Counter
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -19,6 +18,7 @@ from app.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Visitor, Merchant
 from app.services.r2_storage import r2_available, generate_r2_key, upload_to_r2
+from app.services.ai_providers import run_audit_all_providers
 
 router = APIRouter(prefix="/api/pricing-tool", tags=["pricing-tool"])
 
@@ -73,291 +73,42 @@ class ProposalRequest(BaseModel):
     model_config = {"protected_namespaces": ()}
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-#  EXTRACT PROMPT
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ─────────────────────────────────────────────────────────────────
+#  EXTRACTION — delegates to the shared multi-AI engine
+#  (app/services/ai_providers.run_audit_all_providers) + adapter
+# ─────────────────────────────────────────────────────────────────
 
-EXTRACT_PROMPT = """You are a merchant processing statement analyst for NexusPay. Extract fields from this statement. Return ONLY valid JSON, no markdown, no backticks:
-{"business_name":null,"contact_email":null,"contact_phone":null,"monthly_volume":null,"transaction_count":null,"credit_card_pct":null,"avg_ticket":null,"effective_rate":null,"current_processor":null,"total_fees":null,"interchange_cost":null,"industry":null,"mcc_code":null,"findings":[]}
-If a field cannot be determined, use null. For effective_rate, calculate as (total_fees/monthly_volume*100) if both available. Flag hidden fees, overcharges, PCI issues in findings array."""
+async def _run_shared_extraction(file_base64: str, media_type: str, files: list = None) -> Dict[str, Any]:
+    """Run the shared 4-AI extraction engine and adapt its result to the
+    field names this router's endpoints and the frontend expect."""
+    primary_b64 = file_base64 or ""
+    primary_type = media_type
+    page_count = len(files) if files else 0
+    if page_count > 0:
+        primary = files[0] or {}
+        primary_b64 = primary.get("base64") or primary_b64
+        primary_type = primary.get("type") or primary_type
 
+    try:
+        result = await run_audit_all_providers(primary_b64, primary_type)
+    except ValueError as e:
+        raise HTTPException(500, str(e))
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-#  INDIVIDUAL AI PROVIDER CALLS (with vision/document support)
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
-async def _extract_claude(file_base64: str, media_type: str, files: list = None) -> Dict:
-    key = settings.ANTHROPIC_API_KEY
-    if not key:
-        return None
-    content = []
-    headers = {"x-api-key": key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
-    has_pdf = False
-    if files and len(files) > 0:
-        content.append({"type": "text", "text": f"MERCHANT PROCESSING STATEMENT — {len(files)} PAGES. Analyze ALL pages as a single statement:"})
-        for pg in files:
-            mt = pg.get("type", "image/jpeg")
-            b64 = pg.get("base64", "")
-            if mt == "application/pdf":
-                content.append({"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64}})
-                has_pdf = True
-            elif mt.startswith("image"):
-                content.append({"type": "image", "source": {"type": "base64", "media_type": mt, "data": b64}})
-            else:
-                content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64}})
-    else:
-        if media_type == "application/pdf":
-            content.append({"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": file_base64}})
-            has_pdf = True
-        elif media_type.startswith("image"):
-            content.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": file_base64}})
-        else:
-            content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": file_base64}})
-    content.append({"type": "text", "text": EXTRACT_PROMPT})
-    if has_pdf:
-        headers["anthropic-beta"] = "pdfs-2024-09-25"
-    async with httpx.AsyncClient(timeout=120.0) as c:
-        r = await c.post("https://api.anthropic.com/v1/messages",
-            headers=headers,
-            json={"model": "claude-sonnet-4-20250514", "max_tokens": 4096, "messages": [{"role": "user", "content": content}]})
-        if r.status_code != 200:
-            raise Exception(f"Claude {r.status_code}: {r.text[:200]}")
-        d = r.json()
-        txt = "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
-    return {"provider": "Claude", "raw": txt}
-
-
-async def _extract_openai(file_base64: str, media_type: str, files: list = None) -> Dict:
-    key = settings.OPENAI_API_KEY
-    if not key:
-        return None
-    content = []
-    if files and len(files) > 0:
-        content.append({"type": "text", "text": f"MERCHANT PROCESSING STATEMENT — {len(files)} PAGES:"})
-        for pg in files:
-            mt = pg.get("type", "image/jpeg")
-            b64 = pg.get("base64", "")
-            if mt.startswith("image"):
-                content.append({"type": "image_url", "image_url": {"url": f"data:{mt};base64,{b64}"}})
-        content.append({"type": "text", "text": EXTRACT_PROMPT})
-    else:
-        if media_type.startswith("image") or media_type == "application/pdf":
-            content.append({"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{file_base64}"}})
-        content.append({"type": "text", "text": EXTRACT_PROMPT})
-    async with httpx.AsyncClient(timeout=120.0) as c:
-        r = await c.post("https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={"model": "gpt-4o", "max_tokens": 4096, "messages": [{"role": "user", "content": content}]})
-        if r.status_code != 200:
-            raise Exception(f"GPT-4o {r.status_code}: {r.text[:200]}")
-        return {"provider": "GPT-4o", "raw": r.json()["choices"][0]["message"]["content"]}
-
-
-async def _extract_gemini(file_base64: str, media_type: str, files: list = None) -> Dict:
-    key = settings.GOOGLE_API_KEY
-    if not key:
-        return None
-    parts = []
-    if files and len(files) > 0:
-        parts.append({"text": f"MERCHANT PROCESSING STATEMENT — {len(files)} PAGES:"})
-        for pg in files:
-            mt = pg.get("type", "image/jpeg")
-            b64 = pg.get("base64", "")
-            parts.append({"inline_data": {"mime_type": mt, "data": b64}})
-        parts.append({"text": EXTRACT_PROMPT})
-    else:
-        parts.append({"text": EXTRACT_PROMPT})
-        if media_type.startswith("image") or media_type == "application/pdf":
-            parts.append({"inline_data": {"mime_type": media_type, "data": file_base64}})
-    async with httpx.AsyncClient(timeout=120.0) as c:
-        r = await c.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={key}",
-            json={"contents": [{"parts": parts}], "generationConfig": {"temperature": 0.2, "maxOutputTokens": 4096}})
-        if r.status_code != 200:
-            raise Exception(f"Gemini {r.status_code}: {r.text[:200]}")
-        return {"provider": "Gemini", "raw": r.json()["candidates"][0]["content"]["parts"][0]["text"]}
-
-
-async def _extract_grok(file_base64: str, media_type: str, files: list = None) -> Dict:
-    key = settings.GROK_API_KEY
-    if not key:
-        return None
-    content = []
-    if files and len(files) > 0:
-        content.append({"type": "text", "text": f"MERCHANT PROCESSING STATEMENT — {len(files)} PAGES:"})
-        for pg in files:
-            mt = pg.get("type", "image/jpeg")
-            b64 = pg.get("base64", "")
-            if mt.startswith("image"):
-                content.append({"type": "image_url", "image_url": {"url": f"data:{mt};base64,{b64}"}})
-        content.append({"type": "text", "text": EXTRACT_PROMPT})
-    else:
-        content.append({"type": "text", "text": EXTRACT_PROMPT})
-        if media_type.startswith("image"):
-            content.append({"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{file_base64}"}})
-    async with httpx.AsyncClient(timeout=120.0) as c:
-        r = await c.post("https://api.x.ai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={"model": "grok-2-vision-1212", "max_tokens": 1500, "messages": [{"role": "user", "content": content}]})
-        if r.status_code != 200:
-            raise Exception(f"Grok {r.status_code}: {r.text[:200]}")
-        return {"provider": "Grok", "raw": r.json()["choices"][0]["message"]["content"]}
-
-
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-#  JSON PARSER
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
-def _parse_json(raw: str) -> Dict:
-    text = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1:
-        raise ValueError("No JSON found in response")
-    return json.loads(text[start:end + 1])
-
-
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-#  4-AI PARALLEL EXTRACTION + CONSENSUS
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
-async def _run_all_extractions(file_base64: str, media_type: str, files: list = None) -> Dict[str, Any]:
-    """Run all 4 providers in parallel, merge results with consensus scoring."""
-
-    providers = []
-    if settings.ANTHROPIC_API_KEY:
-        providers.append(("Claude", _extract_claude))
-    if settings.OPENAI_API_KEY:
-        providers.append(("GPT-4o", _extract_openai))
-    if settings.GOOGLE_API_KEY:
-        providers.append(("Gemini", _extract_gemini))
-    if settings.GROK_API_KEY:
-        providers.append(("Grok", _extract_grok))
-
-    if not providers:
-        raise HTTPException(500, "No AI API keys configured â€” set ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, GROK_API_KEY in Render env vars")
-
-    results = []
-    errors = []
-
-    async def _run(name, func):
-        try:
-            raw = await func(file_base64, media_type, files=files)
-            if raw:
-                parsed = _parse_json(raw["raw"])
-                parsed["_provider"] = name
-                results.append(parsed)
-        except Exception as e:
-            errors.append({"provider": name, "error": str(e)})
-
-    await asyncio.gather(*[_run(n, f) for n, f in providers])
-
-    if not results:
-        err_msg = "; ".join(f"{e['provider']}: {e['error']}" for e in errors)
-        raise HTTPException(500, f"All AI providers failed: {err_msg}")
-
-    # Single provider â€” return directly
-    if len(results) == 1:
-        r = results[0]
-        r["_providerCount"] = 1
-        r["_confidence"] = "single"
-        r["_providers"] = [r["_provider"]]
-        r["_errors"] = errors
-        return r
-
-    # Multi-provider consensus merge
-    consensus = _build_extraction_consensus(results)
-    consensus["_errors"] = errors
-    return consensus
-
-
-def _build_extraction_consensus(results: List[Dict]) -> Dict[str, Any]:
-    """Merge extraction results from multiple AI providers with confidence scoring."""
-
-    FIELDS = [
-        "business_name", "contact_email", "contact_phone", "monthly_volume",
-        "transaction_count", "credit_card_pct", "avg_ticket", "effective_rate",
-        "current_processor", "total_fees", "interchange_cost", "industry", "mcc_code"
+    adapted = dict(result)
+    adapted["business_name"] = adapted.pop("name", None) or None
+    adapted["current_processor"] = adapted.pop("processor", None) or None
+    adapted["findings"] = [
+        (f.get("text", "") if isinstance(f, dict) else str(f))
+        for f in (result.get("findings") or [])
     ]
-
-    merged = {}
-    field_sources = {}  # track which providers agreed on each field
-
-    for field in FIELDS:
-        values = []
-        for r in results:
-            v = r.get(field)
-            if v is not None and v != "" and v != 0:
-                values.append((v, r.get("_provider", "?")))
-
-        if not values:
-            merged[field] = None
-            field_sources[field] = []
-            continue
-
-        # Numeric fields â€” take median of non-null values
-        if field in ("monthly_volume", "transaction_count", "credit_card_pct",
-                      "avg_ticket", "effective_rate", "total_fees", "interchange_cost"):
-            nums = []
-            sources = []
-            for v, p in values:
-                try:
-                    n = float(str(v).replace(",", "").replace("$", "").replace("%", ""))
-                    nums.append(n)
-                    sources.append(p)
-                except (ValueError, TypeError):
-                    pass
-            if nums:
-                nums.sort()
-                mid = len(nums) // 2
-                merged[field] = round(nums[mid], 2) if len(nums) % 2 else round((nums[mid - 1] + nums[mid]) / 2, 2)
-                field_sources[field] = sources
-            else:
-                merged[field] = None
-                field_sources[field] = []
-        else:
-            # String fields â€” majority vote, fallback to longest
-            str_vals = [str(v).strip() for v, _ in values if v]
-            sources = [p for _, p in values if _]
-            if str_vals:
-                counts = Counter(s.lower() for s in str_vals)
-                winner_lower = counts.most_common(1)[0][0]
-                # Find original-case version
-                winner = next((s for s in str_vals if s.lower() == winner_lower), str_vals[0])
-                merged[field] = winner
-                field_sources[field] = [p for v, p in values if str(v).strip().lower() == winner_lower]
-            else:
-                merged[field] = None
-                field_sources[field] = []
-
-    # Merge findings arrays (deduplicated)
-    all_findings = []
-    seen = set()
-    for r in results:
-        for f in r.get("findings", []):
-            key = f[:50].lower()
-            if key not in seen:
-                seen.add(key)
-                all_findings.append(f)
-    merged["findings"] = all_findings[:10]
-
-    # Confidence scoring
-    total_fields = len(FIELDS)
-    agreed_fields = sum(1 for f in FIELDS if len(field_sources.get(f, [])) >= 2)
-    agree_pct = round((agreed_fields / max(total_fields, 1)) * 100)
-
-    merged["_providerCount"] = len(results)
-    merged["_providers"] = [r.get("_provider", "?") for r in results]
-    merged["_confidence"] = (
-        "certified" if agree_pct >= 80 else
-        "high" if agree_pct >= 60 else
-        "moderate" if agree_pct >= 40 else
-        "review"
-    )
-    merged["_agreePct"] = agree_pct
-    merged["_fieldSources"] = {f: field_sources.get(f, []) for f in FIELDS}
-
-    return merged
+    for field in ("contact_email", "contact_phone", "industry", "mcc_code"):
+        adapted[field] = adapted.get(field) or None
+    adapted.setdefault("_fieldSources", {})
+    if page_count > 1:
+        adapted["_multiPageNote"] = (
+            f"{page_count} pages uploaded; extraction ran on the primary file only."
+        )
+    return adapted
 
 
 # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -432,7 +183,7 @@ async def extract_statement(req: ExtractRequest, user=Depends(get_current_user))
             r2_key = None
 
     # â”€â”€ Run all 4 AI providers in parallel â”€â”€
-    result = await _run_all_extractions(req.file_base64 or "", media_type, files=getattr(req, "files", None))
+    result = await _run_shared_extraction(req.file_base64 or "", media_type, files=getattr(req, "files", None))
 
     # Attach R2 key and file metadata
     result["_r2_key"] = r2_key
@@ -468,6 +219,7 @@ async def extract_statement(req: ExtractRequest, user=Depends(get_current_user))
         "_fieldSources": result.get("_fieldSources", {}),
         "_errors": result.get("_errors", []),
         "_r2_key": r2_key,
+        **({"_multiPageNote": result["_multiPageNote"]} if "_multiPageNote" in result else {}),
     }
 
 
@@ -695,7 +447,7 @@ def _compute_forensic_grade(effective_rate: float) -> Dict[str, Any]:
 async def public_extract_statement(req: PublicExtractRequest, db: AsyncSession = Depends(get_db)):
     """Public: 4-AI extraction + auto-create Visitor lead + Merchant record."""
     media_type = req.resolved_media_type()
-    result = await _run_all_extractions(req.file_base64 or "", media_type, files=req.files)
+    result = await _run_shared_extraction(req.file_base64 or "", media_type, files=req.files)
 
     biz = result.get("business_name") or req.business_name or "Unknown Business"
     vol = result.get("monthly_volume") or 0
@@ -789,4 +541,5 @@ async def public_extract_statement(req: PublicExtractRequest, db: AsyncSession =
         "_estimated_annual_overcharge": annual_overcharge,
         "_findings_count": len(findings_list),
         "_merchant_id": merchant_id_for_signup,
+        **({"_multiPageNote": result["_multiPageNote"]} if "_multiPageNote" in result else {}),
     }
