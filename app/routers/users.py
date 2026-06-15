@@ -21,7 +21,7 @@ router = APIRouter()
 # ── GET /api/users ──────────────────────────────────────────
 @router.get("/users", response_model=list[UserResponse])
 async def list_users(
-    user: dict = Depends(require_role("admin", "employee")),
+    user: dict = Depends(require_role("admin")),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(User).order_by(User.created_at.desc()))

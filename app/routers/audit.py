@@ -358,6 +358,10 @@ async def get_audit_status(
     if not job:
         raise HTTPException(status_code=404, detail="Audit not found")
 
+    # Role isolation: only admin/employee may view other users' audit jobs
+    if user.get("role") not in ("admin", "employee") and job.user_id != user.get("sub"):
+        raise HTTPException(status_code=403, detail="Not authorized to view this audit")
+
     return AuditStatusResponse(
         id=job.id,
         status=job.status,

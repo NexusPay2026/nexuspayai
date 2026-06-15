@@ -1,6 +1,7 @@
 """
 Pricing Quote endpoints.
-Admin and Employee roles only.
+Internal staff only (admin, employee, ic). Employees and ICs are scoped
+to quotes they created; admin sees all.
 """
 
 from datetime import datetime, timezone
@@ -152,6 +153,9 @@ async def update_quote_status(
     quote = result.scalar_one_or_none()
     if not quote:
         raise HTTPException(status_code=404, detail="Quote not found")
+
+    if user.get("role") in ("employee", "ic") and quote.created_by != user["sub"]:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     quote.status = new_status
     await db.commit()
