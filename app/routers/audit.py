@@ -63,6 +63,21 @@ def _combined_hash(per_file_hashes: List[str]) -> str:
     return hashlib.sha256(joined).hexdigest()
 
 
+ENTITY_MATCH_TOLERANCE = 0.05  # 5% - volume/fees this close to a stored record = same statement
+
+
+def _within_pct(new_val, stored_val, tolerance: float = ENTITY_MATCH_TOLERANCE) -> bool:
+    """True if new_val is within `tolerance` (relative) of stored_val."""
+    try:
+        new_val = float(new_val or 0)
+        stored_val = float(stored_val or 0)
+    except (TypeError, ValueError):
+        return False
+    if stored_val == 0:
+        return new_val == 0
+    return abs(new_val - stored_val) <= tolerance * abs(stored_val)
+
+
 def _client_meta(request: Request):
     ip = request.client.host if request and request.client else None
     ua = request.headers.get("user-agent") if request else None
@@ -188,6 +203,7 @@ async def run_audit(
             "merchant_id": prior_job.merchant_id,
             "status": "complete",
             "cache_hit": True,
+            "entity_match": False,
             "statement_date": _normalize_month(_cached.get("statement_month", "")),
             "confidence": prior_job.confidence,
             "agree_pct": prior_job.agree_pct,
@@ -280,6 +296,87 @@ async def run_audit(
         # Per-provider snapshots flagged against consensus (after derived rates above)
         provider_results = _build_provider_results(result)
 
+        db_user = await db.execute(select(User).where(User.email == user.get("email")))
+        u = db_user.scalar_one_or_none()
+
+        # 6b) ENTITY-LEVEL DEDUP - same MID + statement_date + owner, and the
+        # extracted volume/fees within 5% of a stored record => same statement
+        # re-uploaded (e.g. a rescan with different bytes). Return the stored
+        # result instead of persisting a duplicate merchant.
+        # NOTE: runs after extraction because merchant_number / monthly_volume /
+        # total_fees only exist once the providers have read the statement.
+        if mn and statement_date and u:
+            ent_q = await db.execute(
+                select(Merchant).where(
+                    Merchant.merchant_number == mn,
+                    Merchant.statement_date == statement_date,
+                    Merchant.owner_id == u.id,
+                ).order_by(Merchant.created_at.desc())
+            )
+            for entity in ent_q.scalars().all():
+                if not (_within_pct(result.get("monthly_volume", 0), entity.monthly_volume)
+                        and _within_pct(result.get("total_fees", 0), entity.total_fees)):
+                    continue
+
+                prior_q = await db.execute(
+                    select(AuditJob)
+                    .where(AuditJob.merchant_id == entity.id,
+                           AuditJob.status == "complete")
+                    .order_by(AuditJob.created_at.desc())
+                )
+                entity_job = prior_q.scalars().first()
+                cached = (entity_job.consensus_data if entity_job else None) or {
+                    "name": entity.name,
+                    "processor": entity.processor,
+                    "statement_month": entity.statement_month,
+                    "merchant_number": entity.merchant_number,
+                    "monthly_volume": entity.monthly_volume,
+                    "total_fees": entity.total_fees,
+                    "interchange_cost": entity.interchange_cost,
+                    "processor_markup": entity.processor_markup,
+                    "monthly_fees": entity.monthly_fees,
+                    "transaction_count": entity.transaction_count,
+                    "credit_card_pct": entity.credit_card_pct,
+                    "avg_ticket": entity.avg_ticket,
+                    "effective_rate": entity.effective_rate,
+                    "interchange_rate": entity.interchange_rate,
+                    "markup_rate": entity.markup_rate,
+                    "risk_score": entity.risk_score,
+                    "line_items": entity.line_items,
+                    "findings": entity.findings,
+                }
+
+                job.merchant_id = entity.id
+                job.status = "complete"
+                job.consensus_data = cached
+                job.confidence = entity_job.confidence if entity_job else "single"
+                job.agree_pct = entity.agree_pct
+                job.cache_hit = True
+                job.completed_at = datetime.now(timezone.utc)
+
+                await audit_log.record(
+                    db, action="dedup_hit", actor=user, entity_type="merchant",
+                    entity_id=entity.id, file_hash=combined,
+                    ip_address=ip, user_agent=ua,
+                    detail={"reason": "entity match - same MID + statement_date + "
+                                      "owner, volume/fees within 5%",
+                            "merchant_number": mn,
+                            "statement_date": statement_date,
+                            "page_count": page_count},
+                    commit=True,
+                )
+                return {
+                    "audit_id": job.id,
+                    "merchant_id": entity.id,
+                    "status": "complete",
+                    "cache_hit": True,
+                    "entity_match": True,
+                    "statement_date": statement_date,
+                    "confidence": job.confidence,
+                    "agree_pct": entity.agree_pct,
+                    "data": cached,
+                }
+
         # 7) REVISION CHECK - same MID + statement_date, different bytes => flag + keep
         revision_group = None
         is_revision = False
@@ -339,8 +436,6 @@ async def run_audit(
             uploaded_via=uploaded_via,
             consent_at=(datetime.now(timezone.utc) if consent else None),
         )
-        db_user = await db.execute(select(User).where(User.email == user.get("email")))
-        u = db_user.scalar_one_or_none()
         if u:
             merchant.owner_id = u.id
         db.add(merchant)
@@ -369,6 +464,7 @@ async def run_audit(
             "merchant_id": merchant.id,
             "status": "complete",
             "cache_hit": False,
+            "entity_match": False,
             "statement_date": statement_date,
             "confidence": result.get("_confidence"),
             "agree_pct": agree_pct,
