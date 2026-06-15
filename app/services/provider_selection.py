@@ -77,26 +77,27 @@ class SponsorProfile:
 # CONTRACT-DERIVED ratings — extracted from each Schedule A + ownership/exit clauses
 # (2026-06-15) and cross-verified against the source documents.
 #   brand_risk: 1 safest .. 5 riskiest      strategic: 1 locked-in .. 5 best ISO path
-# `configured` = contract-grounded AND executed (a signed copy is actually on hand).
-# Every file currently in contracts/ is a NEGOTIATION draft, not an executed copy:
+# `configured` = contract-grounded AND executed (a signed copy is on hand).
 #   Beacon     — appears final ("Custom Comp"); signature page not independently confirmed.
-#   North      — provided PDF is a pre-signature DocuSign delivery (0 captured signatures).
-#   Maverick   — "Cleaned" file is a ROUND 1 counter-redline (FRE 408), blank signature
-#                blocks, "Open Items for Round 2."
-#   Kurv / EMS — Round 3 counter-redline (FRE 408, "for negotiation only"), blank
-#                signature block, awaiting EMS's response to 3 open asks.
-# Marc states these were signed, but the executed copies are NOT among the files
-# provided. Only Beacon left True (pending re-check); the rest are False until a
-# countersigned copy is supplied (or on Marc's explicit instruction to trust).
+#   North      — provided PDF is a pre-signature DocuSign delivery (0 signatures) — PENDING.
+#   Maverick   — EXECUTED: DocuSign envelope DCDA74B4… "Completed", signed by Marc Shamp
+#                6/2/2026. NOTE: the signed packet is the W9 / ACH / background-auth /
+#                reseller-signature set + cert; it does NOT contain the Schedule A, so the
+#                85/80/50 splits are taken from the Round-2-final redline. Confirm which
+#                Schedule A is attached to the executed agreement (negotiated vs Maverick's
+#                08-22-2024 standard).
+#   Kurv / EMS — Round 3 counter-redline; NexusPay's own email says "prepared to execute
+#                upon resolution" — awaiting EMS response — PENDING.
+# Need the completed DocuSign envelopes for North and EMS to flip those to True.
 #
 # ⚠ quotes.py residual splits still don't match: Maverick (90/80/60 vs 85/80/50) and
 # Kurv/EMS (80/50 vs 90/55) are wrong; Beacon (75/50) and North (70) match.
 SPONSOR_PROFILES: Dict[str, SponsorProfile] = {
     "Beacon Traditional": SponsorProfile("Beacon Traditional", brand_risk=3, strategic=2, configured=True),
     "Beacon Flex":        SponsorProfile("Beacon Flex",        brand_risk=3, strategic=2, configured=True),
-    "North":              SponsorProfile("North",              brand_risk=4, strategic=2),  # pre-signature PDF (0 sigs)
-    "Kurv / EMS":         SponsorProfile("Kurv / EMS",         brand_risk=3, strategic=2),  # Round-3 redline, unsigned
-    "Maverick":           SponsorProfile("Maverick",           brand_risk=2, strategic=2),  # Round-1 redline, unsigned
+    "North":              SponsorProfile("North",              brand_risk=4, strategic=2),  # pre-signature PDF (0 sigs) — pending
+    "Kurv / EMS":         SponsorProfile("Kurv / EMS",         brand_risk=3, strategic=2),  # Round-3 redline — pending
+    "Maverick":           SponsorProfile("Maverick",           brand_risk=2, strategic=2, configured=True),  # DocuSign Completed 6/2/2026
     # "CardConnect", "Pineapple Payments" — add when contracts are active
 }
 
