@@ -32,6 +32,10 @@ env/
 Thumbs.db
 .DS_Store
 
+# ── Confidential sponsor/ISO contracts — NEVER commit or push ───
+/contracts/*
+!/contracts/README.md
+
 # ── Logs ─────────────────────────────────────────────────────
 *.log
 
