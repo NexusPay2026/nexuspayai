@@ -25,6 +25,25 @@ def require_internal(user: dict):
         raise HTTPException(status_code=403, detail="Pricing quotes are restricted to internal staff")
 
 
+def _is_admin(user: dict) -> bool:
+    """Only admin (Marc / designated C-level) may see sponsor identities and economics."""
+    return user.get("role") == "admin"
+
+
+# Keys in the AI deal analysis that name our sponsor program or reveal internal
+# economics — stripped for non-admin roles (employees / ICs).
+_SPONSOR_ANALYSIS_KEYS = (
+    "recommended_program", "reasoning", "annual_nexuspay_value", "internal_notes",
+)
+
+
+def _redact_analysis(analysis):
+    """Drop sponsor-naming / internal-economics keys from the AI analysis dict."""
+    if not isinstance(analysis, dict):
+        return analysis
+    return {k: v for k, v in analysis.items() if k not in _SPONSOR_ANALYSIS_KEYS}
+
+
 @router.post("/quotes", response_model=QuoteResponse)
 async def create_quote(
     payload: QuoteCreate,
@@ -78,16 +97,19 @@ async def create_quote(
     await db.refresh(quote)
 
     pdf_url = None
-    try:
-        pdf_bytes = generate_quote_pdf(quote)
-        pdf_url = await upload_quote_pdf(quote.id, pdf_bytes)
-        if pdf_url:
-            quote.pdf_url = pdf_url
-            await db.commit()
-    except Exception:
-        pass
+    if _is_admin(user):
+        # The quote PDF is an internal residual-comparison sheet that names every
+        # sponsor and its payout. Admin-only until a redacted staff version exists.
+        try:
+            pdf_bytes = generate_quote_pdf(quote)
+            pdf_url = await upload_quote_pdf(quote.id, pdf_bytes)
+            if pdf_url:
+                quote.pdf_url = pdf_url
+                await db.commit()
+        except Exception:
+            pass
 
-    return _to_response(quote)
+    return _to_response(quote, redact=not _is_admin(user))
 
 
 @router.get("/quotes", response_model=QuoteListResponse)
@@ -116,7 +138,7 @@ async def list_quotes(
     quotes = result.scalars().all()
 
     return QuoteListResponse(
-        quotes=[_to_response(q) for q in quotes],
+        quotes=[_to_response(q, redact=not _is_admin(user)) for q in quotes],
         total=len(quotes),
     )
 
@@ -137,7 +159,7 @@ async def get_quote(
     if user.get("role") in ("employee", "ic") and quote.created_by != user["sub"]:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    return _to_response(quote)
+    return _to_response(quote, redact=not _is_admin(user))
 
 
 @router.put("/quotes/{quote_id}/status")
@@ -183,8 +205,8 @@ async def delete_quote(
     return {"message": f"Quote {quote_id} deleted"}
 
 
-def _to_response(q: Quote) -> QuoteResponse:
-    return QuoteResponse(
+def _to_response(q: Quote, redact: bool = False) -> QuoteResponse:
+    resp = QuoteResponse(
         id=q.id,
         created_by=q.created_by,
         created_at=q.created_at.isoformat() if q.created_at else "",
@@ -220,6 +242,23 @@ def _to_response(q: Quote) -> QuoteResponse:
         status=q.status,
         pdf_url=q.pdf_url or "",
     )
+    if redact:
+        # Non-admin (employee / ic): hide sponsor identities, per-sponsor
+        # payouts, and the "best payer". Admin sees the full breakdown.
+        resp.beacon_trad_residual = 0
+        resp.beacon_trad_margin = 0
+        resp.beacon_flex_residual = 0
+        resp.beacon_flex_margin = 0
+        resp.north_residual = 0
+        resp.north_margin = 0
+        resp.kurv_residual = 0
+        resp.kurv_margin = 0
+        resp.maverick_residual = 0
+        resp.maverick_tnr = 0
+        resp.best_program = ""
+        resp.best_residual = 0
+        resp.pdf_url = ""  # existing PDFs embed the full sponsor residual table
+    return resp
 
 
 # ── AI-POWERED DEAL ANALYSIS ─────────────────────────────────
@@ -305,19 +344,23 @@ async def analyze_quote(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI analysis failed: {str(e)}")
 
-    return {
-        "analysis": analysis,
+    is_admin = _is_admin(user)
+    resp = {
+        "analysis": analysis if is_admin else _redact_analysis(analysis),
         "validation": validation,
-        "residuals": {
+        "provider_count": analysis.get("_providerCount", 0),
+        "confidence": analysis.get("_confidence", "single"),
+    }
+    if is_admin:
+        # Sponsor identities + per-sponsor payouts are admin-only.
+        resp["residuals"] = {
             "beacon_trad": round(bt_res, 2),
             "beacon_flex": round(bf_res, 2),
             "north": round(nt_res, 2),
             "kurv": round(kv_res, 2),
             "maverick": round(mv_res, 2),
-        },
-        "provider_count": analysis.get("_providerCount", 0),
-        "confidence": analysis.get("_confidence", "single"),
-    }
+        }
+    return resp
 
 
 @router.post("/quotes/validate")
