@@ -4,6 +4,27 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>NexusPay Intelligence — Merchant Processing Command Center</title>
+<!-- Build self-report: the deploy substitutes these tokens with the real values.
+     On Netlify add a one-line build command (see deploy notes):
+     sed -i "s/__BUILD_COMMIT__/$COMMIT_REF/g; s/__BUILD_BRANCH__/$BRANCH/g" frontend/index.html
+     Until that's wired the tokens stay literal and the portal reports "unknown". -->
+<meta name="build-commit" content="__BUILD_COMMIT__"/>
+<meta name="build-branch" content="__BUILD_BRANCH__"/>
+<script>
+(function(){
+  function val(n){var m=document.querySelector('meta[name="'+n+'"]');return m?m.content:"";}
+  function wired(v){return v && v.indexOf("__BUILD_")===-1;}
+  var c=val("build-commit"), b=val("build-branch");
+  window.__BUILD__={
+    commit: wired(c)?c:"unknown",
+    commit_short: wired(c)?c.slice(0,7):"unknown",
+    branch: wired(b)?b:"unknown"
+  };
+  console.log("%cNexusPay portal build","font-weight:bold;color:#4ea1ff",
+    wired(c) ? ("commit "+window.__BUILD__.commit_short+" ("+window.__BUILD__.branch+")")
+             : "commit unknown — build-commit substitution not configured (see <head> deploy note)");
+})();
+</script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
