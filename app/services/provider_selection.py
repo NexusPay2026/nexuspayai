@@ -90,8 +90,8 @@ class SponsorProfile:
 #                upon resolution" — awaiting EMS response — PENDING.
 # Need the completed DocuSign envelopes for North and EMS to flip those to True.
 #
-# ⚠ quotes.py residual splits still don't match: Maverick (90/80/60 vs 85/80/50) and
-# Kurv/EMS (80/50 vs 90/55) are wrong; Beacon (75/50) and North (70) match.
+# quotes.py residual splits now MATCH the signed contracts (reconciled 2026-06-15):
+# Maverick 85/80/50, Kurv/EMS 90/55, Beacon 75/50, North 70.
 SPONSOR_PROFILES: Dict[str, SponsorProfile] = {
     "Beacon Traditional": SponsorProfile("Beacon Traditional", brand_risk=3, strategic=2, configured=True),
     "Beacon Flex":        SponsorProfile("Beacon Flex",        brand_risk=3, strategic=2, configured=True),

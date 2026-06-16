@@ -28,6 +28,22 @@ services:
         generateValue: true
       - key: JWT_EXPIRE_HOURS
         value: "72"
+      # ── Seed account passwords (set manually in Render dashboard) ─
+      # Admin seed is forced to rotate on first login. If ADMIN_SEED_PASSWORD is
+      # unset, a random one-time password is generated and logged once at boot.
+      # DEMO_SEED_PASSWORD is optional; leave unset to skip the demo account.
+      - key: ADMIN_SEED_PASSWORD
+        sync: false
+      - key: DEMO_SEED_PASSWORD
+        sync: false
+      # ── Login rate limiting / lockout (optional; defaults applied if unset) ─
+      # In-memory and per-process: resets on restart, counted per worker.
+      - key: LOGIN_RATE_PER_IP_PER_MIN
+        value: "10"
+      - key: LOGIN_MAX_FAILS
+        value: "5"
+      - key: LOGIN_LOCKOUT_MINUTES
+        value: "15"
       # ── AI Provider Keys (set manually in Render dashboard) ─
       - key: ANTHROPIC_API_KEY
         sync: false

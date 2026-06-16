@@ -4,6 +4,27 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>NexusPay Intelligence — Merchant Processing Command Center</title>
+<!-- Build self-report: the deploy substitutes these tokens with the real values.
+     On Netlify add a one-line build command (see deploy notes):
+     sed -i "s/__BUILD_COMMIT__/$COMMIT_REF/g; s/__BUILD_BRANCH__/$BRANCH/g" frontend/index.html
+     Until that's wired the tokens stay literal and the portal reports "unknown". -->
+<meta name="build-commit" content="__BUILD_COMMIT__"/>
+<meta name="build-branch" content="__BUILD_BRANCH__"/>
+<script>
+(function(){
+  function val(n){var m=document.querySelector('meta[name="'+n+'"]');return m?m.content:"";}
+  function wired(v){return v && v.indexOf("__BUILD_")===-1;}
+  var c=val("build-commit"), b=val("build-branch");
+  window.__BUILD__={
+    commit: wired(c)?c:"unknown",
+    commit_short: wired(c)?c.slice(0,7):"unknown",
+    branch: wired(b)?b:"unknown"
+  };
+  console.log("%cNexusPay portal build","font-weight:bold;color:#4ea1ff",
+    wired(c) ? ("commit "+window.__BUILD__.commit_short+" ("+window.__BUILD__.branch+")")
+             : "commit unknown — build-commit substitution not configured (see <head> deploy note)");
+})();
+</script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
@@ -748,6 +769,10 @@ html,body{height:100%;overflow:hidden;background:var(--void);color:var(--t1);fon
           <div style="font-size:28px;margin-bottom:8px">🔐</div>
           <div style="font-size:13px;font-weight:600">Change Your Password</div>
           <div style="font-family:var(--mono);font-size:10px;color:var(--warn);margin-top:6px">You are using a temporary password. You must set a new one before continuing.</div>
+        </div>
+        <div class="login-field">
+          <label>Current (Temporary) Password</label>
+          <input type="password" id="change-curpass" placeholder="Enter the password you just signed in with" autocomplete="current-password" />
         </div>
         <div class="login-field">
           <label>New Password (min 8 chars)</label>
@@ -1804,13 +1829,17 @@ async function doForceChangePassword() {
   setTimeout(function(){ _forceChangeLock = false; }, 500);
   var errEl = document.getElementById('login-error');
   errEl.style.display = 'none';
+  var cur = (document.getElementById('change-curpass').value||'');
   var p1 = (document.getElementById('change-newpass').value||'');
   var p2 = (document.getElementById('change-newpass2').value||'');
+  if (!cur) { errEl.textContent = 'Enter your current (temporary) password'; errEl.style.display = 'block'; return; }
   if (p1.length < 8) { errEl.textContent = 'Password must be at least 8 characters'; errEl.style.display = 'block'; return; }
   if (p1 !== p2) { errEl.textContent = 'Passwords do not match'; errEl.style.display = 'block'; return; }
   if (!_forceChangeUser) { errEl.textContent = 'Session error — please sign in again'; errEl.style.display = 'block'; loginTab('signin'); return; }
 
-  var r = await _api('POST', '/api/change-password', { email: _forceChangeUser.email, new_password: p1 });
+  // Identity comes from the JWT set at login; the body carries only the current
+  // and new passwords (backend verifies current_password before changing).
+  var r = await _api('POST', '/api/change-password', { current_password: cur, new_password: p1 });
   if (!r.ok) { errEl.textContent = r.error; errEl.style.display = 'block'; return; }
 
   // Login with new password to get fresh JWT
@@ -1824,6 +1853,7 @@ async function doForceChangePassword() {
     tier:lr.data.tier||'free', veteran:lr.data.veteran||false, mustChangePassword:false
   };
   _setForceChangeUser(null);
+  document.getElementById('change-curpass').value = '';
   document.getElementById('change-newpass').value = '';
   document.getElementById('change-newpass2').value = '';
   _completeLogin(found);

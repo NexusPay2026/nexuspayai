@@ -3,8 +3,13 @@ Auth router — login, register, password management, /api/me.
 Matches the frontend's existing _api() call signatures exactly.
 """
 
+import logging
+import os
+import secrets
+import time
+from collections import defaultdict, deque
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -23,6 +28,22 @@ from app.config import settings
 
 router = APIRouter()
 
+logger = logging.getLogger("nexuspay.auth")
+
+
+def _resolve_seed_password(env_var: str) -> tuple[str, bool]:
+    """Return (password, was_generated) for a seed account.
+
+    The password is read from the given env var. If it is unset, a random
+    one-time password is generated instead — no password is ever hardcoded in
+    source. When generated, the caller logs it once so an operator can retrieve
+    it from the boot logs and rotate it.
+    """
+    pw = (os.getenv(env_var) or "").strip()
+    if pw:
+        return pw, False
+    return secrets.token_urlsafe(18), True
+
 
 # ── Seed admin + demo on first call ─────────────────────────
 _seeded = False
@@ -33,51 +54,129 @@ async def _seed_defaults(db: AsyncSession):
         return
     _seeded = True
 
-    # Admin
+    # Admin — password from ADMIN_SEED_PASSWORD; random one-time if unset.
+    # No default password is hardcoded, and the admin is always forced to rotate
+    # it on first login.
     result = await db.execute(select(User).where(User.email == settings.ADMIN_EMAIL))
     if not result.scalar_one_or_none():
+        admin_pw, generated = _resolve_seed_password("ADMIN_SEED_PASSWORD")
+        if generated:
+            logger.warning(
+                "Seeded admin %s with a RANDOM one-time password (ADMIN_SEED_PASSWORD "
+                "not set): %s — log in and change it immediately.",
+                settings.ADMIN_EMAIL, admin_pw,
+            )
         admin = User(
             email=settings.ADMIN_EMAIL,
-            password_hash=hash_password("NexusPay2026!"),
+            password_hash=hash_password(admin_pw),
             display_name="Admin",
             company="NexusPay Services",
             role="admin",
             tier="enterprise",
             active=True,
             verified=True,
+            must_change_password=True,  # force rotation on first login
             created_by="system",
         )
         db.add(admin)
 
-    # Demo
+    # Demo — only seeded when DEMO_SEED_PASSWORD is explicitly set, so we never
+    # create a shared account with a guessable/hardcoded password.
     result = await db.execute(select(User).where(User.email == "demo@nexuspayservices.com"))
     if not result.scalar_one_or_none():
-        demo = User(
-            email="demo@nexuspayservices.com",
-            password_hash=hash_password("Demo2026!"),
-            display_name="Demo User",
-            company="Demo",
-            role="demo",
-            tier="free",
-            active=True,
-            verified=True,
-            created_by="system",
-        )
-        db.add(demo)
+        demo_pw = (os.getenv("DEMO_SEED_PASSWORD") or "").strip()
+        if not demo_pw:
+            logger.warning("DEMO_SEED_PASSWORD not set — skipping demo account seed.")
+        else:
+            demo = User(
+                email="demo@nexuspayservices.com",
+                password_hash=hash_password(demo_pw),
+                display_name="Demo User",
+                company="Demo",
+                role="demo",
+                tier="free",
+                active=True,
+                verified=True,
+                created_by="system",
+            )
+            db.add(demo)
 
     await db.commit()
 
 
+# ── Login rate limiting / lockout ───────────────────────────
+# In-memory, per-process (same pattern/caveats as the chatbot limiter: resets on
+# restart, and with >1 worker each worker keeps its own counters). Tunable via env.
+LOGIN_RATE_PER_IP_PER_MIN = int(os.getenv("LOGIN_RATE_PER_IP_PER_MIN", "10"))
+LOGIN_MAX_FAILS = int(os.getenv("LOGIN_MAX_FAILS", "5"))
+LOGIN_LOCKOUT_MINUTES = int(os.getenv("LOGIN_LOCKOUT_MINUTES", "15"))
+
+_login_ip_buckets = defaultdict(lambda: deque(maxlen=200))   # ip -> recent attempt timestamps
+_login_fail_counts = defaultdict(lambda: deque(maxlen=200))  # email -> recent failure timestamps
+_login_lockouts: dict = {}                                   # email -> unlock epoch seconds
+
+
+def _rate_ok(bucket: deque, limit_per_min: int) -> bool:
+    now = time.time()
+    while bucket and bucket[0] < now - 60:
+        bucket.popleft()
+    if len(bucket) >= limit_per_min:
+        return False
+    bucket.append(now)
+    return True
+
+
+def _lock_seconds_remaining(email: str) -> int:
+    until = _login_lockouts.get(email, 0)
+    if until > time.time():
+        return int(until - time.time())
+    if until:
+        _login_lockouts.pop(email, None)
+    return 0
+
+
+def _record_login_failure(email: str) -> None:
+    now = time.time()
+    fails = _login_fail_counts[email]
+    window = LOGIN_LOCKOUT_MINUTES * 60
+    while fails and fails[0] < now - window:
+        fails.popleft()
+    fails.append(now)
+    if len(fails) >= LOGIN_MAX_FAILS:
+        _login_lockouts[email] = now + window
+        fails.clear()
+
+
+def _clear_login_failures(email: str) -> None:
+    _login_fail_counts.pop(email, None)
+    _login_lockouts.pop(email, None)
+
+
 # ── POST /api/login ─────────────────────────────────────────
 @router.post("/login", response_model=AuthResponse)
-async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def login(req: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
     await _seed_defaults(db)
 
+    # Per-IP throttle: blunts distributed/rapid guessing before we touch the DB.
+    client_ip = request.client.host if request and request.client else "unknown"
+    if not _rate_ok(_login_ip_buckets[client_ip], LOGIN_RATE_PER_IP_PER_MIN):
+        raise HTTPException(status_code=429, detail="Too many login attempts. Please wait a minute and try again.")
+
     email = req.email.strip().lower()
+
+    # Per-account lockout after repeated failures.
+    locked = _lock_seconds_remaining(email)
+    if locked:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Account temporarily locked after too many failed attempts. Try again in {locked // 60 + 1} minute(s).",
+        )
+
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(req.password, user.password_hash):
+        _record_login_failure(email)
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     if not user.active:
@@ -85,6 +184,9 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
 
     if not user.verified:
         raise HTTPException(status_code=403, detail="Email not verified — contact admin")
+
+    # Successful auth — clear any failure/lockout state for this account.
+    _clear_login_failures(email)
 
     # Update last login
     user.last_login = datetime.now(timezone.utc)
@@ -137,13 +239,26 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
 
 # ── POST /api/change-password ────────────────────────────────
 @router.post("/change-password")
-async def change_password(req: ChangePasswordRequest, db: AsyncSession = Depends(get_db)):
-    email = req.email.strip().lower()
-    result = await db.execute(select(User).where(User.email == email))
+async def change_password(
+    req: ChangePasswordRequest,
+    token_data: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Authenticated self-service password change.
+
+    Identity comes from the JWT (token_data["sub"]), never the request body, so a
+    caller can only change their OWN password — and only after proving knowledge
+    of the current password. This also covers the forced first-login change, where
+    the temporary password issued by the admin is the current password.
+    """
+    result = await db.execute(select(User).where(User.id == token_data["sub"]))
     user = result.scalar_one_or_none()
 
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    if not user or not user.active:
+        raise HTTPException(status_code=401, detail="Account not found or inactive")
+
+    if not verify_password(req.current_password, user.password_hash):
+        raise HTTPException(status_code=403, detail="Current password is incorrect")
 
     user.password_hash = hash_password(req.new_password)
     user.must_change_password = False

@@ -18,6 +18,9 @@ from app.services.auth_service import (
 
 router = APIRouter()
 
+# Platform roles accepted anywhere a role is set (onboard or edit).
+VALID_ROLES = ("admin", "employee", "ic", "client", "user", "demo")
+
 # ── GET /api/users ──────────────────────────────────────────
 @router.get("/users", response_model=list[UserResponse])
 async def list_users(
@@ -50,7 +53,6 @@ async def create_user(
         raise HTTPException(status_code=409, detail="Email already registered")
 
     # Role must be one of the platform roles
-    VALID_ROLES = ("admin", "employee", "ic", "client", "user", "demo")
     if req.role not in VALID_ROLES:
         raise HTTPException(status_code=400, detail="Invalid role. Must be one of: " + ", ".join(VALID_ROLES))
 
@@ -105,8 +107,12 @@ async def update_user(
     if not u:
         raise HTTPException(status_code=404, detail="User not found")
 
+    update_data = req.dict(exclude_unset=True)
+    if "role" in update_data and update_data["role"] not in VALID_ROLES:
+        raise HTTPException(status_code=400, detail="Invalid role. Must be one of: " + ", ".join(VALID_ROLES))
+
     try:
-        for field, value in req.dict(exclude_unset=True).items():
+        for field, value in update_data.items():
             setattr(u, field, value)
         u.updated_at = datetime.now(timezone.utc)
         await db.commit()

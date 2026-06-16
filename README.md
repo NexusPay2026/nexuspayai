@@ -204,7 +204,6 @@ object storage, and presigned URL endpoints return 503.
 | GET | `/health` | Any |
 | POST | `/api/login` | Portal |
 | POST | `/api/register` | Portal |
-| POST | `/api/change-password` | Portal |
 | POST | `/webhook/visitor` | Landing page |
 | POST | `/api/leads/contact` | Website |
 | POST | `/api/audit/intake` | Landing page CTA |
@@ -213,6 +212,7 @@ object storage, and presigned URL endpoints return 503.
 | Method | Path | Source |
 |--------|------|--------|
 | GET | `/api/me` | Portal |
+| POST | `/api/change-password` | Portal (self; verifies current password) |
 | GET | `/api/merchants` | Portal |
 | POST | `/api/merchants` | Portal |
 | PUT | `/api/merchants/{id}` | Portal |
@@ -307,11 +307,18 @@ alembic.ini                   ← Alembic config (project root)
 
 ## Default Accounts
 
-On first startup, the backend auto-seeds:
+On first startup (fresh DB only), the backend seeds accounts using **environment
+variables — no passwords are hardcoded in source**:
 
-| Email | Password | Role |
-|-------|----------|------|
-| admin@nexuspayservices.com | NexusPay2026! | admin |
-| demo@nexuspayservices.com | Demo2026! | demo |
+| Email | Password source | Role | Notes |
+|-------|-----------------|------|-------|
+| admin@nexuspayservices.com | `ADMIN_SEED_PASSWORD` | admin | Forced to change on first login. If the var is unset, a random one-time password is generated and printed once to the boot logs. |
+| demo@nexuspayservices.com | `DEMO_SEED_PASSWORD` | demo | Seeded **only if** the var is set; otherwise skipped. |
 
-**Change the admin password immediately after first deploy.**
+> Existing deployments: the seed does **not** rewrite an admin row that already
+> exists. If your live DB was seeded with the old default password, rotate it now
+> — see **`docs/OPERATIONS.md` §2 (one-off live admin rotation)**.
+
+Password change is self-service and authenticated: `POST /api/change-password`
+requires a valid JWT and verifies the current password (identity comes from the
+token, not the request body).
