@@ -3,6 +3,9 @@ Auth router — login, register, password management, /api/me.
 Matches the frontend's existing _api() call signatures exactly.
 """
 
+import logging
+import os
+import secrets
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +26,22 @@ from app.config import settings
 
 router = APIRouter()
 
+logger = logging.getLogger("nexuspay.auth")
+
+
+def _resolve_seed_password(env_var: str) -> tuple[str, bool]:
+    """Return (password, was_generated) for a seed account.
+
+    The password is read from the given env var. If it is unset, a random
+    one-time password is generated instead — no password is ever hardcoded in
+    source. When generated, the caller logs it once so an operator can retrieve
+    it from the boot logs and rotate it.
+    """
+    pw = (os.getenv(env_var) or "").strip()
+    if pw:
+        return pw, False
+    return secrets.token_urlsafe(18), True
+
 
 # ── Seed admin + demo on first call ─────────────────────────
 _seeded = False
@@ -33,37 +52,52 @@ async def _seed_defaults(db: AsyncSession):
         return
     _seeded = True
 
-    # Admin
+    # Admin — password from ADMIN_SEED_PASSWORD; random one-time if unset.
+    # No default password is hardcoded, and the admin is always forced to rotate
+    # it on first login.
     result = await db.execute(select(User).where(User.email == settings.ADMIN_EMAIL))
     if not result.scalar_one_or_none():
+        admin_pw, generated = _resolve_seed_password("ADMIN_SEED_PASSWORD")
+        if generated:
+            logger.warning(
+                "Seeded admin %s with a RANDOM one-time password (ADMIN_SEED_PASSWORD "
+                "not set): %s — log in and change it immediately.",
+                settings.ADMIN_EMAIL, admin_pw,
+            )
         admin = User(
             email=settings.ADMIN_EMAIL,
-            password_hash=hash_password("NexusPay2026!"),
+            password_hash=hash_password(admin_pw),
             display_name="Admin",
             company="NexusPay Services",
             role="admin",
             tier="enterprise",
             active=True,
             verified=True,
+            must_change_password=True,  # force rotation on first login
             created_by="system",
         )
         db.add(admin)
 
-    # Demo
+    # Demo — only seeded when DEMO_SEED_PASSWORD is explicitly set, so we never
+    # create a shared account with a guessable/hardcoded password.
     result = await db.execute(select(User).where(User.email == "demo@nexuspayservices.com"))
     if not result.scalar_one_or_none():
-        demo = User(
-            email="demo@nexuspayservices.com",
-            password_hash=hash_password("Demo2026!"),
-            display_name="Demo User",
-            company="Demo",
-            role="demo",
-            tier="free",
-            active=True,
-            verified=True,
-            created_by="system",
-        )
-        db.add(demo)
+        demo_pw = (os.getenv("DEMO_SEED_PASSWORD") or "").strip()
+        if not demo_pw:
+            logger.warning("DEMO_SEED_PASSWORD not set — skipping demo account seed.")
+        else:
+            demo = User(
+                email="demo@nexuspayservices.com",
+                password_hash=hash_password(demo_pw),
+                display_name="Demo User",
+                company="Demo",
+                role="demo",
+                tier="free",
+                active=True,
+                verified=True,
+                created_by="system",
+            )
+            db.add(demo)
 
     await db.commit()
 
@@ -137,13 +171,26 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
 
 # ── POST /api/change-password ────────────────────────────────
 @router.post("/change-password")
-async def change_password(req: ChangePasswordRequest, db: AsyncSession = Depends(get_db)):
-    email = req.email.strip().lower()
-    result = await db.execute(select(User).where(User.email == email))
+async def change_password(
+    req: ChangePasswordRequest,
+    token_data: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Authenticated self-service password change.
+
+    Identity comes from the JWT (token_data["sub"]), never the request body, so a
+    caller can only change their OWN password — and only after proving knowledge
+    of the current password. This also covers the forced first-login change, where
+    the temporary password issued by the admin is the current password.
+    """
+    result = await db.execute(select(User).where(User.id == token_data["sub"]))
     user = result.scalar_one_or_none()
 
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+    if not user or not user.active:
+        raise HTTPException(status_code=401, detail="Account not found or inactive")
+
+    if not verify_password(req.current_password, user.password_hash):
+        raise HTTPException(status_code=403, detail="Current password is incorrect")
 
     user.password_hash = hash_password(req.new_password)
     user.must_change_password = False
