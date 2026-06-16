@@ -32,6 +32,7 @@ class ExtractRequest(BaseModel):
     media_type: Optional[str] = None
     file_type: Optional[str] = None   # frontend compat alias
     file_name: Optional[str] = "statement"
+    files: Optional[list] = None      # multi-page: [{"base64":"...","type":"image/jpeg"}, ...]
 
     def resolved_media_type(self) -> str:
         """Accept either media_type or file_type from frontend."""
