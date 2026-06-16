@@ -51,6 +51,8 @@ ALLOWED_ORIGINS = [
     "https://nexuspaydashboard.netlify.app",
     # 5. Pricing Tool
     "https://paycalculator.nexuspayai.com",
+    "https://matrix.nexuspayai.com",
+    "https://dashboard.nexuspayservices.com",
     # 6. Calcerta Group / Interstellar I.S. customer-facing site
     "https://isinterstellar.com",
     "https://www.isinterstellar.com",
