@@ -6,8 +6,10 @@ Matches the frontend's existing _api() call signatures exactly.
 import logging
 import os
 import secrets
+import time
+from collections import defaultdict, deque
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -102,16 +104,79 @@ async def _seed_defaults(db: AsyncSession):
     await db.commit()
 
 
+# ── Login rate limiting / lockout ───────────────────────────
+# In-memory, per-process (same pattern/caveats as the chatbot limiter: resets on
+# restart, and with >1 worker each worker keeps its own counters). Tunable via env.
+LOGIN_RATE_PER_IP_PER_MIN = int(os.getenv("LOGIN_RATE_PER_IP_PER_MIN", "10"))
+LOGIN_MAX_FAILS = int(os.getenv("LOGIN_MAX_FAILS", "5"))
+LOGIN_LOCKOUT_MINUTES = int(os.getenv("LOGIN_LOCKOUT_MINUTES", "15"))
+
+_login_ip_buckets = defaultdict(lambda: deque(maxlen=200))   # ip -> recent attempt timestamps
+_login_fail_counts = defaultdict(lambda: deque(maxlen=200))  # email -> recent failure timestamps
+_login_lockouts: dict = {}                                   # email -> unlock epoch seconds
+
+
+def _rate_ok(bucket: deque, limit_per_min: int) -> bool:
+    now = time.time()
+    while bucket and bucket[0] < now - 60:
+        bucket.popleft()
+    if len(bucket) >= limit_per_min:
+        return False
+    bucket.append(now)
+    return True
+
+
+def _lock_seconds_remaining(email: str) -> int:
+    until = _login_lockouts.get(email, 0)
+    if until > time.time():
+        return int(until - time.time())
+    if until:
+        _login_lockouts.pop(email, None)
+    return 0
+
+
+def _record_login_failure(email: str) -> None:
+    now = time.time()
+    fails = _login_fail_counts[email]
+    window = LOGIN_LOCKOUT_MINUTES * 60
+    while fails and fails[0] < now - window:
+        fails.popleft()
+    fails.append(now)
+    if len(fails) >= LOGIN_MAX_FAILS:
+        _login_lockouts[email] = now + window
+        fails.clear()
+
+
+def _clear_login_failures(email: str) -> None:
+    _login_fail_counts.pop(email, None)
+    _login_lockouts.pop(email, None)
+
+
 # ── POST /api/login ─────────────────────────────────────────
 @router.post("/login", response_model=AuthResponse)
-async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def login(req: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
     await _seed_defaults(db)
 
+    # Per-IP throttle: blunts distributed/rapid guessing before we touch the DB.
+    client_ip = request.client.host if request and request.client else "unknown"
+    if not _rate_ok(_login_ip_buckets[client_ip], LOGIN_RATE_PER_IP_PER_MIN):
+        raise HTTPException(status_code=429, detail="Too many login attempts. Please wait a minute and try again.")
+
     email = req.email.strip().lower()
+
+    # Per-account lockout after repeated failures.
+    locked = _lock_seconds_remaining(email)
+    if locked:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Account temporarily locked after too many failed attempts. Try again in {locked // 60 + 1} minute(s).",
+        )
+
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(req.password, user.password_hash):
+        _record_login_failure(email)
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     if not user.active:
@@ -119,6 +184,9 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
 
     if not user.verified:
         raise HTTPException(status_code=403, detail="Email not verified — contact admin")
+
+    # Successful auth — clear any failure/lockout state for this account.
+    _clear_login_failures(email)
 
     # Update last login
     user.last_login = datetime.now(timezone.utc)

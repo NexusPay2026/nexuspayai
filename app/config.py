@@ -83,6 +83,16 @@ class Settings:
                 "Set it in Render environment variables pointing to your Postgres instance. "
                 "SQLite fallback is disabled in production."
             )
+        # Outside development, refuse to boot with a missing/placeholder JWT secret —
+        # tokens signed with the default secret can be forged.
+        if self.APP_ENV != "development" and (
+            not self.JWT_SECRET or self.JWT_SECRET == "CHANGE-ME-IN-PRODUCTION"
+        ):
+            raise RuntimeError(
+                "JWT_SECRET is not set (or is the default placeholder). "
+                "Set a strong random value in Render environment variables. "
+                "Tokens signed with the default secret can be forged."
+            )
         # Render uses postgres:// but asyncpg needs postgresql://
         if self.DATABASE_URL.startswith("postgres://"):
             self.DATABASE_URL = self.DATABASE_URL.replace("postgres://", "postgresql://", 1)

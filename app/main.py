@@ -47,10 +47,10 @@ ALLOWED_ORIGINS = [
     # 3. Portal / Bloomberg terminal UI
     "https://nexuspayai.com",
     "https://www.nexuspayai.com",
-    # 4. Visitor tracking dashboard
+    # 4. Visitor tracking dashboard (explicit Netlify production site)
     "https://nexuspaydashboard.netlify.app",
     # 5. Pricing Tool
-"https://paycalculator.nexuspayai.com",
+    "https://paycalculator.nexuspayai.com",
     # 6. Calcerta Group / Interstellar I.S. customer-facing site
     "https://isinterstellar.com",
     "https://www.isinterstellar.com",
@@ -59,16 +59,25 @@ ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:8080",
 ]
+# NOTE: the Netlify production sites are listed explicitly above
+# (nexuspaylandingpage.netlify.app, nexuspaydashboard.netlify.app). The previous
+# wildcard `allow_origin_regex=r"https://.*\.netlify\.app"` was removed — paired
+# with credentials it let ANY *.netlify.app site call the authenticated API. Add
+# new production Netlify domains to ALLOWED_ORIGINS explicitly; deploy-preview URLs
+# are intentionally not allowed.
 
-# If in dev, allow all
+# Credentials may only be sent with an explicit origin allowlist. In development
+# we allow all origins for convenience, so credentials MUST be disabled there
+# (browsers reject "*" + credentials, and it would be unsafe regardless).
+ALLOW_CREDENTIALS = True
 if settings.APP_ENV == "development":
     ALLOWED_ORIGINS = ["*"]
+    ALLOW_CREDENTIALS = False
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_origin_regex=r"https://.*\.netlify\.app",
-    allow_credentials=True,
+    allow_credentials=ALLOW_CREDENTIALS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
