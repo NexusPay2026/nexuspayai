@@ -2055,6 +2055,45 @@ function resendVerification() {
 }
 
 // -- Email verification via tokenized link (backend /api/verify-email) --
+async function _resetPasswordFromLink() {
+  var params = new URLSearchParams(window.location.search);
+  var resetToken = params.get('reset_token');
+  if (!resetToken) return;
+  try { document.getElementById('login-overlay').classList.remove('hidden'); } catch(e) {}
+  if (typeof loginTab === 'function') loginTab('forgot');
+  var step1 = document.getElementById('forgot-step1');
+  var step2 = document.getElementById('forgot-step2');
+  if (step1) step1.style.display = 'none';
+  if (step2) step2.style.display = 'block';
+  var codeField = document.getElementById('forgot-code');
+  if (codeField && codeField.closest('.login-field')) codeField.closest('.login-field').style.display = 'none';
+  var resetBtn = document.querySelector('#forgot-step2 .login-btn');
+  if (resetBtn) {
+    resetBtn.textContent = 'Set New Password';
+    resetBtn.setAttribute('onclick', '_submitResetFromLink()');
+  }
+  window._pendingResetToken = resetToken;
+}
+
+async function _submitResetFromLink() {
+  var errEl = document.getElementById('login-error');
+  var succEl = document.getElementById('login-success');
+  if (errEl) errEl.style.display = 'none';
+  var newPass = (document.getElementById('forgot-newpass') || {}).value || '';
+  var newPass2 = (document.getElementById('forgot-newpass2') || {}).value || '';
+  if (newPass.length < 8) { if (errEl) { errEl.textContent = 'New password must be at least 8 characters'; errEl.style.display = 'block'; } return; }
+  if (newPass !== newPass2) { if (errEl) { errEl.textContent = 'Passwords do not match'; errEl.style.display = 'block'; } return; }
+  var r = await _api('POST', '/api/reset-password', { token: window._pendingResetToken, new_password: newPass });
+  if (!r.ok) { if (errEl) { errEl.textContent = r.error || 'Reset failed.'; errEl.style.display = 'block'; } return; }
+  try { history.replaceState({}, '', '/'); } catch(e) {}
+  if (typeof loginTab === 'function') loginTab('signin');
+  if (succEl) {
+    succEl.textContent = 'Password reset. Sign in with your new password.';
+    succEl.style.display = 'block';
+  }
+  window._pendingResetToken = null;
+}
+
 async function _verifyEmailFromLink() {
   var params = new URLSearchParams(window.location.search);
   var token = params.get('token');
@@ -2149,21 +2188,16 @@ async function doForgotPassword() {
   var r = await _api('POST', '/api/forgot-password', { email: email });
   if (!r.ok) { errEl.textContent = r.error; errEl.style.display = 'block'; return; }
 
-  // Show temp password — user signs in with it, then forced to change
+  // Backend emails a reset link (no on-screen credential). Tell the user to check email.
   succEl.innerHTML =
-    '<div style="text-align:center">' +
-      'Your temporary password for <strong>' + esc(email) + '</strong>:' +
-      '<div style="font-size:22px;font-weight:700;color:var(--lime);letter-spacing:4px;margin:8px 0;user-select:all">' + esc(r.data.temp_password) + '</div>' +
-      '<div style="font-size:9px;color:var(--t4)">Sign in with this password. You will be asked to set a new one.</div>' +
-    '</div>';
+    '<div style="text-align:center">If an account exists for <strong>' + esc(email) +
+    '</strong>, a password reset link has been sent. Check your inbox (and spam) and click the link to set a new password.</div>';
   succEl.style.display = 'block';
-
-  // Switch to signin after a delay
   setTimeout(function() {
     loginTab('signin');
     setTimeout(function() {
       var s = document.getElementById('login-success');
-      s.innerHTML = '✓ Temporary password generated. Sign in with it now.';
+      s.textContent = 'Reset link sent if the account exists. Check your email.';
       s.style.display = 'block';
     }, 50);
   }, 4000);
@@ -2187,6 +2221,7 @@ function _sendResetEmail(email, name, code) {
 
 var _resetPwLock = false;
 function doResetPassword() {
+  if (window._pendingResetToken) { _submitResetFromLink(); return; }
   if (_resetPwLock) return;
   _resetPwLock = true;
   setTimeout(function(){ _resetPwLock = false; }, 500);
@@ -2489,6 +2524,7 @@ var STATES = [
 document.addEventListener('DOMContentLoaded', function() {
   checkAuth();
     _verifyEmailFromLink();
+    _resetPasswordFromLink();
   buildTicker();
   buildAuditView();
   buildIntelView();
