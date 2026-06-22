@@ -230,7 +230,7 @@ async def _is_excluded(db: AsyncSession, email: str, name: str) -> bool:
 
 
 async def _send_verification_email(user: User, raw_token: str) -> bool:
-    link = f"{settings.PORTAL_URL}/verify?token={raw_token}"
+    link = f"{settings.PORTAL_URL}/?token={raw_token}"
     html = (
         f"<p>Welcome to NexusPay, {user.display_name or 'there'}.</p>"
         f"<p>Please confirm your email address to activate your account:</p>"
