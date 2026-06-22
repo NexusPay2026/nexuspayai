@@ -18,6 +18,7 @@ from app.database import get_db
 from app.models import User, Exclusion, EmailVerificationToken
 from app.schemas import (
     LoginRequest, RegisterRequest, ChangePasswordRequest,
+    ResetPasswordRequest,
     AuthResponse, MeResponse,
 )
 from pydantic import BaseModel, EmailStr
