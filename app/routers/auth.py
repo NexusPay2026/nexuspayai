@@ -229,6 +229,19 @@ async def _is_excluded(db: AsyncSession, email: str, name: str) -> bool:
     return False
 
 
+async def _send_reset_email(user: User, raw_token: str) -> bool:
+    link = f"{settings.PORTAL_URL}/?reset_token={raw_token}"
+    html = (
+        f"<p>Hello {user.display_name or 'there'},</p>"
+        f"<p>We received a request to reset your NexusPay password. "
+        f"Click below to choose a new password:</p>"
+        f'<p><a href="{link}">Reset my password</a></p>'
+        f"<p>This link expires in {VERIFICATION_TOKEN_TTL_HOURS} hours and can be used once. "
+        f"If you did not request this, you can ignore this email; your password will not change.</p>"
+    )
+    return await send_email(user.email, "Reset your NexusPay password", html)
+
+
 async def _send_verification_email(user: User, raw_token: str) -> bool:
     link = f"{settings.PORTAL_URL}/?token={raw_token}"
     html = (
@@ -342,6 +355,38 @@ async def resend_verification(req: ResendVerificationRequest, db: AsyncSession =
     await _send_verification_email(user, raw_token)
     return generic
 
+@router.post("/reset-password")
+async def reset_password(req: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+    """Complete a password reset using a single-use token from the emailed link.
+
+    The raw token is hashed and matched against an unused, unexpired row with
+    purpose='reset'. On success the user's password is updated and the token is
+    consumed (single-use)."""
+    token_hash = hashlib.sha256(req.token.encode()).hexdigest()
+    result = await db.execute(
+        select(EmailVerificationToken).where(
+            EmailVerificationToken.token_hash == token_hash,
+            EmailVerificationToken.purpose == "reset",
+            EmailVerificationToken.used == False,  # noqa: E712
+        )
+    )
+    row = result.scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=400, detail="Invalid or already-used reset link.")
+    if row.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="This reset link has expired. Please request a new one.")
+
+    user_result = await db.execute(select(User).where(User.id == row.user_id))
+    user = user_result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="Account not found.")
+
+    user.password_hash = hash_password(req.new_password)
+    user.must_change_password = False
+    row.used = True
+    await db.commit()
+    return {"message": "Password reset successfully. You can now sign in with your new password."}
+
 @router.post("/change-password")
 async def change_password(
     req: ChangePasswordRequest,
@@ -401,15 +446,20 @@ class ForgotPasswordRequest(BaseModel):
 
 @router.post("/forgot-password")
 async def forgot_password(req: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
-    """Generates a reset — for now returns success regardless (prevents email enumeration)."""
+    """Issue a single-use, expiring password-reset token and email a reset link."""
+    generic = {"message": "If that email exists, a password reset link has been sent."}
     email = req.email.strip().lower()
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
-
-    # Always return success to prevent email enumeration
-    if not user:
-        return {"message": "If that email exists, a reset code has been sent."}
-
-    # In production, this would send an email with a reset token.
-    # For now, the frontend handles reset codes client-side.
-    return {"message": "If that email exists, a reset code has been sent."}
+    if not user or not user.active:
+        return generic
+    raw_token, token_hash = _make_verification_token()
+    db.add(EmailVerificationToken(
+        user_id=user.id,
+        token_hash=token_hash,
+        purpose="reset",
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=VERIFICATION_TOKEN_TTL_HOURS),
+    ))
+    await db.commit()
+    await _send_reset_email(user, raw_token)
+    return generic
