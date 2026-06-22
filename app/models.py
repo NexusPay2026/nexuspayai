@@ -253,3 +253,20 @@ class Exclusion(Base):
     reason = Column(Text, default="")
     added_by = Column(String(320), default="")
     created_at = Column(DateTime(timezone=True), server_default=_func_excl.now())
+
+# -- Email verification / password reset tokens (single-use, expiring) --
+# Only a HASH of the token is stored; the raw token lives only in the emailed
+# link. purpose distinguishes "verify" (email verification) from "reset"
+# (password reset), so this one table serves both flows.
+import uuid as _uuid_evt
+from sqlalchemy.sql import func as _func_evt
+
+class EmailVerificationToken(Base):
+    __tablename__ = "email_verification_tokens"
+    id = Column(String, primary_key=True, default=lambda: _uuid_evt.uuid4().hex)
+    user_id = Column(String, nullable=False, index=True)
+    token_hash = Column(String, nullable=False, index=True)
+    purpose = Column(String(20), nullable=False, default="verify")
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=_func_evt.now())

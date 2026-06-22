@@ -2018,7 +2018,7 @@ async function doRegister() {
   loginTab('signin');
   setTimeout(function() {
     var s = document.getElementById('login-success');
-    s.textContent = '✓ Account created! Sign in with your credentials.';
+    s.textContent = '✓ Account created. Check your email to verify your account before signing in.';
     s.style.display = 'block';
   }, 50);
 }
@@ -2052,6 +2052,43 @@ function resendVerification() {
     '<span style="font-size:8px;color:var(--t4)">Enter this code below. Expires in 15 minutes.</span>';
   // Try email silently
   _sendVerificationEmail(_pendingVerifyEmail, user.displayName, code);
+}
+
+// -- Email verification via tokenized link (backend /api/verify-email) --
+async function _verifyEmailFromLink() {
+  var params = new URLSearchParams(window.location.search);
+  var token = params.get('token');
+  var isVerifyPath = (window.location.pathname || '').indexOf('/verify') !== -1;
+  if (!token && !isVerifyPath) return;  // normal page load, nothing to do
+
+  // Show the login overlay + verify pane, repurposed for link verification
+  try { document.getElementById('login-overlay').classList.remove('hidden'); } catch(e) {}
+  if (typeof loginTab === 'function') loginTab('verify');
+  var msgEl = document.getElementById('verify-msg');
+  var codeField = document.getElementById('verify-code');
+  var verifyBtn = document.querySelector('#lp-verify .login-btn');
+  // Hide the old 6-digit input/button for the link flow
+  if (codeField && codeField.closest('.login-field')) codeField.closest('.login-field').style.display = 'none';
+  if (verifyBtn) verifyBtn.style.display = 'none';
+
+  if (!token) {
+    if (msgEl) msgEl.innerHTML = 'No verification token found in the link. Please use the link from your email.';
+    return;
+  }
+  if (msgEl) msgEl.textContent = 'Verifying your email...';
+
+  var r = await _api('GET', '/api/verify-email?token=' + encodeURIComponent(token), null);
+  if (r.ok) {
+    if (msgEl) msgEl.innerHTML = '<span style="color:var(--lime)">Email verified.</span> You can now sign in.';
+    setTimeout(function() {
+      try { history.replaceState({}, '', '/'); } catch(e) {}
+      if (typeof loginTab === 'function') loginTab('signin');
+      if (codeField && codeField.closest('.login-field')) codeField.closest('.login-field').style.display = '';
+      if (verifyBtn) verifyBtn.style.display = '';
+    }, 2500);
+  } else {
+    if (msgEl) msgEl.innerHTML = '<span style="color:var(--dn)">' + (r.error || 'Verification failed.') + '</span><br>The link may have expired. Try signing in and requesting a new verification email.';
+  }
 }
 
 var _verifyLock = false;
@@ -2451,6 +2488,7 @@ var STATES = [
 // ── INIT ──────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', function() {
   checkAuth();
+    _verifyEmailFromLink();
   buildTicker();
   buildAuditView();
   buildIntelView();

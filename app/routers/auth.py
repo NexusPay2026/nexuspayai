@@ -3,18 +3,19 @@ Auth router — login, register, password management, /api/me.
 Matches the frontend's existing _api() call signatures exactly.
 """
 
+import hashlib
 import logging
 import os
 import secrets
 import time
 from collections import defaultdict, deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.database import get_db
-from app.models import User
+from app.models import User, Exclusion, EmailVerificationToken
 from app.schemas import (
     LoginRequest, RegisterRequest, ChangePasswordRequest,
     AuthResponse, MeResponse,
@@ -24,6 +25,7 @@ from app.services.auth_service import (
     hash_password, verify_password, create_token,
     get_current_user,
 )
+from app.services.email import send_email
 from app.config import settings
 
 router = APIRouter()
@@ -208,6 +210,37 @@ async def login(req: LoginRequest, request: Request, db: AsyncSession = Depends(
 
 
 # ── POST /api/register ──────────────────────────────────────
+VERIFICATION_TOKEN_TTL_HOURS = 24
+
+
+def _make_verification_token() -> tuple[str, str]:
+    raw = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw.encode()).hexdigest()
+    return raw, token_hash
+
+
+async def _is_excluded(db: AsyncSession, email: str, name: str) -> bool:
+    result = await db.execute(select(Exclusion))
+    for entry in result.scalars().all():
+        if entry.email and entry.email.strip().lower() == email:
+            return True
+        if entry.name and name and entry.name.strip().lower() == name.strip().lower():
+            return True
+    return False
+
+
+async def _send_verification_email(user: User, raw_token: str) -> bool:
+    link = f"{settings.PORTAL_URL}/verify?token={raw_token}"
+    html = (
+        f"<p>Welcome to NexusPay, {user.display_name or 'there'}.</p>"
+        f"<p>Please confirm your email address to activate your account:</p>"
+        f'<p><a href="{link}">Verify my email</a></p>'
+        f"<p>This link expires in {VERIFICATION_TOKEN_TTL_HOURS} hours. "
+        f"If you did not create a NexusPay account, you can ignore this email.</p>"
+    )
+    return await send_email(user.email, "Verify your NexusPay account", html)
+
+
 @router.post("/register", status_code=201)
 async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
     await _seed_defaults(db)
@@ -218,6 +251,8 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.email == email))
     if result.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="An account with this email already exists")
+    if await _is_excluded(db, email, req.name):
+        raise HTTPException(status_code=403, detail="This account cannot be created. Please contact support.")
 
     user = User(
         email=email,
@@ -228,16 +263,85 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
         tier="free",
         veteran=req.veteran,
         active=True,
-        verified=True,  # Auto-verify for now; add email verification later
+        verified=False,  # must verify email before login
         created_by="self",
     )
     db.add(user)
     await db.commit()
 
-    return {"message": "Account created successfully", "email": email}
+    await db.refresh(user)
+    raw_token, token_hash = _make_verification_token()
+    db.add(EmailVerificationToken(
+        user_id=user.id,
+        token_hash=token_hash,
+        purpose="verify",
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=VERIFICATION_TOKEN_TTL_HOURS),
+    ))
+    await db.commit()
+    sent = await _send_verification_email(user, raw_token)
+    if not sent:
+        return {"message": "Account created, but the verification email could not be sent. Please contact support.", "email": email, "email_sent": False}
+    return {"message": "Account created. Check your email to verify your address before logging in.", "email": email, "email_sent": True}
 
 
 # ── POST /api/change-password ────────────────────────────────
+@router.get("/verify-email")
+async def verify_email(token: str, db: AsyncSession = Depends(get_db)):
+    """Validate an email-verification token and activate the account.
+
+    The raw token from the emailed link is hashed and matched against an unused,
+    unexpired row. On success the user's `verified` flag is set True and the
+    token is marked used (single-use)."""
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    result = await db.execute(
+        select(EmailVerificationToken).where(
+            EmailVerificationToken.token_hash == token_hash,
+            EmailVerificationToken.purpose == "verify",
+            EmailVerificationToken.used == False,  # noqa: E712
+        )
+    )
+    row = result.scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=400, detail="Invalid or already-used verification link.")
+    if row.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="This verification link has expired. Please request a new one.")
+
+    user_result = await db.execute(select(User).where(User.id == row.user_id))
+    user = user_result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="Account not found.")
+
+    user.verified = True
+    row.used = True
+    await db.commit()
+    return {"message": "Email verified. You can now log in.", "email": user.email}
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
+
+
+@router.post("/resend-verification")
+async def resend_verification(req: ResendVerificationRequest, db: AsyncSession = Depends(get_db)):
+    """Re-send a verification link. Always returns the same generic message so
+    the endpoint cannot be used to discover which emails have accounts."""
+    generic = {"message": "If that account exists and is unverified, a new verification email has been sent."}
+    email = req.email.strip().lower()
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+    if not user or user.verified:
+        return generic  # do not reveal whether the account exists / is already verified
+
+    raw_token, token_hash = _make_verification_token()
+    db.add(EmailVerificationToken(
+        user_id=user.id,
+        token_hash=token_hash,
+        purpose="verify",
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=VERIFICATION_TOKEN_TTL_HOURS),
+    ))
+    await db.commit()
+    await _send_verification_email(user, raw_token)
+    return generic
+
 @router.post("/change-password")
 async def change_password(
     req: ChangePasswordRequest,

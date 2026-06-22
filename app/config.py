@@ -36,6 +36,10 @@ class Settings:
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
     GROK_API_KEY: str = os.getenv("GROK_API_KEY", "")
 
+    # -- Email (Resend transactional email; server-side only) --
+    RESEND_API_KEY: str = os.getenv("RESEND_API_KEY", "")
+    RESEND_FROM: str = os.getenv("RESEND_FROM", "NexusPay <noreply@send.nexuspayai.com>")
+
     # ── AI Model Names (env-overridable; defaults are known-good) ──
     # To upgrade a model, set the matching env var in Render — no code change.
     ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
