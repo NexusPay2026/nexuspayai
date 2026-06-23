@@ -44,6 +44,16 @@ Extraction rules:
 - If a value genuinely does not appear and cannot be derived, use null. Do not invent numbers.
 - EXCEPTION - "name" and "processor" must NEVER be null or empty. Every statement identifies the merchant and the processor somewhere. If neither is explicitly labeled, use your best evidence candidate: the DBA line, the merchant header, the address block, the remittance/logo block, or the entity the statement is addressed to. Pick the strongest candidate present rather than returning null.
 
+PROVENANCE (NEW - an evidence trail you populate IN ADDITION to every field above, never instead of any of them):
+Also return a "provenance" object that traces the key figures listed in the schema to their source on the statement. For each figure set "class" to exactly one of:
+- "EXTRACTED" - the figure is printed on the statement. REQUIRED: "page" (the 1-based page it appears on) and "quote" (the exact text as printed - the line's label plus its amount, copied verbatim, e.g. Total Fees $1,234.56). Keep each quote to the single shortest span that proves the number. Set "basis" to null.
+- "DERIVED" - you computed it from other figures. REQUIRED: "basis" (the formula, e.g. total_fees/monthly_volume*100). Set "page" and "quote" to null.
+- "ESTIMATED" - neither printed nor derivable; a reasoned estimate only. Set "page", "quote", and "basis" to null and use a "confidence" below 0.5.
+"confidence" is your 0-1 certainty for that one figure.
+Citing the page: text input is delimited by "===== PAGE n OF m =====" markers; PDF/image input shows the printed pages - cite the 1-based page where the figure actually appears.
+CORE-FIGURE RULE: monthly_volume, total_fees, and transaction_count must be "EXTRACTED" (with page + verbatim quote) or "DERIVED" (with basis) - NEVER "ESTIMATED". If one is genuinely absent and cannot be derived, set its "value" to null, "class" to "ESTIMATED", and "confidence" below 0.3 so the audit is routed to human review.
+QUOTE SAFETY: inside "quote", never use the double-quote character (") - if the source text contains one, replace it with a single quote - and keep each quote on one short line so the JSON stays valid.
+
 Return ONLY a valid JSON object. No markdown fences, no preamble, no trailing text. Start with { and end with }.
 
 Schema:
@@ -84,12 +94,21 @@ Schema:
   "markup_rate": <processor_markup/monthly_volume*100>,
   "risk_score": <integer 0-100, 100=most overcharged>,
   "pages_detected": <integer total pages you read>,
+  "provenance": {
+    "monthly_volume":    {"value": <float|null>, "class": "EXTRACTED|DERIVED|ESTIMATED", "page": <int|null>, "quote": "<verbatim text from the statement, or null>", "basis": "<formula if DERIVED, else null>", "confidence": <float 0-1>},
+    "total_fees":        {"value": <float|null>, "class": "EXTRACTED|DERIVED|ESTIMATED", "page": <int|null>, "quote": "<verbatim or null>", "basis": "<formula or null>", "confidence": <float 0-1>},
+    "transaction_count": {"value": <int|null>,   "class": "EXTRACTED|DERIVED|ESTIMATED", "page": <int|null>, "quote": "<verbatim or null>", "basis": "<formula or null>", "confidence": <float 0-1>},
+    "interchange_cost":  {"value": <float|null>, "class": "EXTRACTED|DERIVED|ESTIMATED", "page": <int|null>, "quote": "<verbatim or null>", "basis": "<formula or null>", "confidence": <float 0-1>},
+    "processor_markup":  {"value": <float|null>, "class": "EXTRACTED|DERIVED|ESTIMATED", "page": <int|null>, "quote": "<verbatim or null>", "basis": "<formula or null>", "confidence": <float 0-1>},
+    "effective_rate":    {"value": <float|null>, "class": "DERIVED|EXTRACTED|ESTIMATED", "page": <int|null>, "quote": "<verbatim or null>", "basis": "total_fees/monthly_volume*100", "confidence": <float 0-1>}
+  },
   "line_items": [{"name":"<fee name>","category":"interchange|processor|monthly|misc","amount":<float>,"benchmark":<float>,"note":"<1-sentence>"}],
   "findings": [{"text":"<specific finding with exact $ amounts>","severity":"high|medium|low","savings":<annual $ float>}]
 }
 
 Include EVERY fee line item visible across ALL pages in line_items.
-For findings: flag every fee above benchmark, every negotiable charge, every downgrade opportunity, citing exact dollar amounts. Do not stop until every page and every line item has been accounted for."""
+For findings: flag every fee above benchmark, every negotiable charge, every downgrade opportunity, citing exact dollar amounts. Do not stop until every page and every line item has been accounted for.
+Populate the provenance object for all six listed figures - each with its class, a page + verbatim quote (EXTRACTED) or basis formula (DERIVED), and a confidence."""
 
 
 # ────────────────────────────────────────────────────────────
