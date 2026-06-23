@@ -352,6 +352,9 @@ def _provider_summary(r: Dict) -> Dict[str, Any]:
         "monthly_volume": vol,
         "total_fees": fees,
         "effective_rate": eff,
+        # Retain this provider's raw provenance (page + verbatim quote + class +
+        # confidence per figure) so the evidence trail survives to the receipt.
+        "provenance": r.get("provenance"),
     }
 
 

@@ -112,6 +112,9 @@ def _build_provider_results(result: dict) -> List[dict]:
             "total_fees": p.get("total_fees"),
             "effective_rate": p.get("effective_rate"),
             "confidence": confidence,
+            # Carry the per-provider provenance through the whitelist so it lands
+            # in the response and the persisted provider_results JSON column.
+            "provenance": p.get("provenance"),
         })
     return out
 
