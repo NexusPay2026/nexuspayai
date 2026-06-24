@@ -442,14 +442,27 @@ async def _call_gemini(file_b64: str, media_type: str, pdf_text: str,
             headers={"Content-Type": "application/json"},
             json={
                 "contents": [{"parts": parts}],
-                "generationConfig": {"temperature": settings.AI_TEMPERATURE, "maxOutputTokens": settings.AI_MAX_TOKENS},
+                "generationConfig": {
+                    "temperature": settings.AI_TEMPERATURE,
+                    "maxOutputTokens": settings.AI_MAX_TOKENS,
+                    "responseMimeType": "application/json",   # force syntactically valid JSON
+                },
             },
         )
     if resp.status_code != 200:
         raise Exception(f"Gemini API error {resp.status_code}: {resp.text[:300]}")
 
     data = resp.json()
-    text = data["candidates"][0]["content"]["parts"][0]["text"]
+    cand = (data.get("candidates") or [{}])[0]
+    finish = cand.get("finishReason")
+    text = "".join(p.get("text", "") for p in (cand.get("content") or {}).get("parts") or [])
+    # finishReason lets us tell truncation (MAX_TOKENS) from a safety block from
+    # normal completion, instead of surfacing a confusing downstream parse error.
+    if finish and finish not in ("STOP", "MAX_TOKENS"):
+        raise Exception(f"Gemini returned no usable content (finishReason={finish})")
+    if finish == "MAX_TOKENS":
+        logger.warning("Gemini hit MAX_TOKENS (%d) — output truncated", settings.AI_MAX_TOKENS)
+    logger.info("Gemini OK: finishReason=%s, %d chars", finish, len(text))
     return {"provider": "Gemini", "raw": text}
 
 
@@ -498,6 +511,7 @@ async def _call_grok(file_b64: str, media_type: str, pdf_text: str,
                 "model": model,
                 "max_tokens": settings.AI_MAX_TOKENS,
                 "temperature": settings.AI_TEMPERATURE,
+                "response_format": {"type": "json_object"},   # force syntactically valid JSON (xAI is OpenAI-compatible)
                 "messages": [{"role": "user", "content": msg_content}],
             },
         )
