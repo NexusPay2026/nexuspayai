@@ -23,6 +23,37 @@ from app.services.ai_providers import run_audit_all_providers
 router = APIRouter(prefix="/api/pricing-tool", tags=["pricing-tool"])
 
 
+# ── Upload size guard (matches audit.py MAX_TOTAL_BYTES) ──────────
+MAX_TOTAL_BYTES = 75 * 1024 * 1024  # 75MB total decoded across all uploaded files
+
+
+def _b64_decoded_size(b64: str) -> int:
+    """Decoded byte size of a base64 string, computed from its length without
+    allocating the decoded bytes (cheap pre-decode size guard)."""
+    if not b64:
+        return 0
+    s = "".join(b64.split())  # drop any whitespace/newlines
+    if s.startswith("data:") and "," in s:
+        s = s.split(",", 1)[1]
+    pad = s[-2:].count("=")
+    return (len(s) * 3) // 4 - pad
+
+
+def _enforce_upload_size(files, file_base64) -> None:
+    """Reject with 413 if the combined DECODED size of all uploaded files exceeds
+    the cap. Checks base64 length (no decode) so oversized payloads are rejected
+    before any processing."""
+    total = _b64_decoded_size(file_base64 or "")
+    for f in files or []:
+        f = f or {}
+        total += _b64_decoded_size(f.get("base64") or f.get("data") or "")
+    if total > MAX_TOTAL_BYTES:
+        raise HTTPException(
+            413,
+            f"Upload too large ({total // (1024 * 1024)}MB); max {MAX_TOTAL_BYTES // (1024 * 1024)}MB total.",
+        )
+
+
 # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 #  REQUEST / RESPONSE MODELS
 # â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
@@ -80,18 +111,42 @@ class ProposalRequest(BaseModel):
 # ─────────────────────────────────────────────────────────────────
 
 async def _run_shared_extraction(file_base64: str, media_type: str, files: list = None) -> Dict[str, Any]:
-    """Run the shared 4-AI extraction engine and adapt its result to the
-    field names this router's endpoints and the frontend expect."""
-    primary_b64 = file_base64 or ""
-    primary_type = media_type
-    page_count = len(files) if files else 0
-    if page_count > 0:
-        primary = files[0] or {}
-        primary_b64 = primary.get("base64") or primary_b64
-        primary_type = primary.get("type") or primary_type
+    """Run the shared 4-AI extraction engine on EVERY uploaded page and adapt its
+    result to the field names this router's endpoints and the frontend expect.
+
+    Previously this read only files[0] and silently dropped pages 2..N. Now the
+    whole upload is normalized into an ordered `pages` list and handed to the
+    engine, which presents every page to every provider as a labeled content
+    block ("Page 1 of N", ...). The first page is also passed positionally for
+    backward compatibility with the single-file engine signature.
+    """
+    # Normalize the upload into an ordered page list. Multi-file uploads (photos,
+    # multi-page picks) arrive in `files`; a single upload uses file_base64.
+    pages: List[Dict[str, str]] = []
+    if files:
+        for f in files:
+            f = f or {}
+            b64 = f.get("base64") or f.get("data")
+            if not b64:
+                continue
+            pages.append({
+                "base64": b64,
+                "media_type": f.get("type") or f.get("media_type") or media_type or "",
+            })
+    if not pages and file_base64:
+        pages.append({"base64": file_base64, "media_type": media_type or ""})
+    if not pages:
+        raise HTTPException(400, "No file content to analyze.")
+
+    primary_b64 = pages[0]["base64"]
+    primary_type = pages[0]["media_type"]
+    page_count = len(pages)
 
     try:
-        result = await run_audit_all_providers(primary_b64, primary_type)
+        # `pages` carries ALL pages; the engine (ai_providers.py, STEP 2) renders
+        # them as labeled per-provider content blocks. primary_* stays for the
+        # single-file fallback path.
+        result = await run_audit_all_providers(primary_b64, primary_type, pages=pages)
     except ValueError as e:
         raise HTTPException(500, str(e))
 
@@ -105,10 +160,7 @@ async def _run_shared_extraction(file_base64: str, media_type: str, files: list 
     for field in ("contact_email", "contact_phone", "industry", "mcc_code"):
         adapted[field] = adapted.get(field) or None
     adapted.setdefault("_fieldSources", {})
-    if page_count > 1:
-        adapted["_multiPageNote"] = (
-            f"{page_count} pages uploaded; extraction ran on the primary file only."
-        )
+    adapted["_pageCount"] = page_count
     return adapted
 
 
@@ -220,7 +272,7 @@ async def extract_statement(req: ExtractRequest, user=Depends(get_current_user))
         "_fieldSources": result.get("_fieldSources", {}),
         "_errors": result.get("_errors", []),
         "_r2_key": r2_key,
-        **({"_multiPageNote": result["_multiPageNote"]} if "_multiPageNote" in result else {}),
+        **({"_pageCount": result["_pageCount"]} if "_pageCount" in result else {}),
     }
 
 
@@ -447,6 +499,7 @@ def _compute_forensic_grade(effective_rate: float) -> Dict[str, Any]:
 @router.post("/public-extract")
 async def public_extract_statement(req: PublicExtractRequest, db: AsyncSession = Depends(get_db)):
     """Public: 4-AI extraction + auto-create Visitor lead + Merchant record."""
+    _enforce_upload_size(req.files, req.file_base64)   # 413 if total decoded size > 75MB
     media_type = req.resolved_media_type()
     result = await _run_shared_extraction(req.file_base64 or "", media_type, files=req.files)
 
@@ -531,6 +584,7 @@ async def public_extract_statement(req: PublicExtractRequest, db: AsyncSession =
         "_providerCount": result.get("_providerCount", 0),
         "_providers": result.get("_providers", []),
         "_confidence": result.get("_confidence", "unknown"),
+        "_errors": result.get("_errors", []),
         "_saved": True,
         # Forensic Audit v1 fields
         "_grade": forensic["grade"],
@@ -542,5 +596,5 @@ async def public_extract_statement(req: PublicExtractRequest, db: AsyncSession =
         "_estimated_annual_overcharge": annual_overcharge,
         "_findings_count": len(findings_list),
         "_merchant_id": merchant_id_for_signup,
-        **({"_multiPageNote": result["_multiPageNote"]} if "_multiPageNote" in result else {}),
+        **({"_pageCount": result["_pageCount"]} if "_pageCount" in result else {}),
     }

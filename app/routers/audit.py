@@ -50,7 +50,7 @@ ALLOWED_TYPES = {
     "application/pdf", "image/png", "image/jpeg", "image/jpg", "image/webp",
     "image/tiff", "image/heic", "text/csv", "text/plain",
 }
-MAX_TOTAL_BYTES = 40 * 1024 * 1024  # 40MB across all files in one statement
+MAX_TOTAL_BYTES = 75 * 1024 * 1024  # 75MB across all files in one statement (high-res multi-page scans)
 
 
 def _sha256(data: bytes) -> str:

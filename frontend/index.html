@@ -4219,6 +4219,17 @@ function renderAuditResults(d) {
     })() :
     (d._provider ? '<div style="padding:6px 12px;background:rgba(184,240,64,.04);border:1px solid rgba(184,240,64,.12);border-radius:4px;margin-bottom:10px;font-family:var(--mono);font-size:9px;color:var(--t3)">Analyzed by ' + esc(d._provider) + (d._consensusNote ? ' · ' + esc(d._consensusNote) : '') + '</div>' : '')
     ) +
+    // ── PROVIDER FAILURES (named — not silently dropped) ───────
+    ((d._errors && d._errors.length) ? (function() {
+      var rows = d._errors.map(function(e) {
+        return '<div style="font-family:var(--mono);font-size:9px;color:var(--warn);margin-top:3px">⚠ ' + esc(e.provider||'?') + ': ' + esc(e.error||'failed') + '</div>';
+      }).join('');
+      var total = (d._providerCount||0) + d._errors.length;
+      return '<div style="padding:8px 12px;background:rgba(224,144,32,.05);border:1px solid rgba(224,144,32,.25);border-radius:4px;margin-bottom:10px">' +
+        '<div style="font-family:var(--mono);font-size:9px;font-weight:700;color:var(--warn)">' + d._errors.length + ' of ' + total + ' AI providers did not return:</div>' +
+        rows +
+      '</div>';
+    })() : '') +
     // ── PER-PROVIDER RESULT CARDS ──────────────────────────────
     ((d._providerResults && d._providerResults.length) ? (function() {
       var cards = d._providerResults.map(function(pr) {

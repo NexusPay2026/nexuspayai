@@ -33,28 +33,23 @@ from app.config import settings
 
 logger = logging.getLogger("nexuspay.ai")
 
-AI_EXTRACTION_PROMPT = """You are a Senior Forensic Payment Processing Analyst with CPA-level numerical discipline.
+AI_EXTRACTION_PROMPT = """You are a forensic payment-processing audit TEAM with CPA-level numerical discipline. Treat this engagement like forensic accounting: every number you report must be traceable to the exact page and the exact printed text it came from.
 
-Read the ENTIRE statement PAGE BY PAGE, LINE BY LINE. Do not skip any page or any line. Many merchant statements run 3-5 pages; fee schedules and totals frequently appear on later pages, so you MUST process every page to the end before answering.
+PROCESS - do this in order, do not skip:
+1. Read EVERY page, in order, top to bottom, line by line. Statements often run 3-6 pages and put fee schedules and totals on later pages. Pages are labeled "===== PAGE n OF m =====" (text input) or supplied as page images in order ("Page n of N:"). Record the page number for every value you report.
+2. Transcribe EVERY fee, rate, count, and dollar amount exactly as printed - the label and the amount, verbatim. Do NOT paraphrase, round, normalize, or skip "small" items (PCI, regulatory, statement, batch, network access, dues & assessments, downgrades).
+3. Classify EVERY value you output as exactly one of:
+   - "EXTRACTED" - read directly off the statement. MUST carry its page number and verbatim printed text.
+   - "DERIVED"   - computed from two or more EXTRACTED values. MUST carry the formula. Never invent inputs.
+   - "ESTIMATED" - not present on the statement and not derivable.
+4. NEVER report an ESTIMATED value as a fact or as a finding. If an expected value is not on the statement and cannot be derived, do NOT substitute a benchmark or a guess - list it in "not_found" as {"label":"<name>","status":"NOT_FOUND"}.
+5. If the same item appears on two pages with different values, record BOTH in "discrepancies" with page numbers - never silently pick one.
+6. Verify your arithmetic before reporting any DERIVED value (e.g., effective_rate = total_fees / monthly_volume * 100). Report only verified figures.
+7. "name" and "processor" must NEVER be null or empty. If neither is explicitly labeled, use the strongest evidence candidate: the DBA line, the merchant header, the address block, or the remittance/logo block.
 
-Extraction rules:
-- Use the EXACT numbers printed on the document. Do not estimate or round source figures.
-- Capture EVERY fee line item, including small ones (PCI, regulatory, statement, batch, network access, dues & assessments, downgrades).
-- Re-derive any value you can compute from others, and VERIFY your arithmetic before reporting it (e.g., effective_rate = total_fees / monthly_volume * 100). Internally double-check each calculation; report only verified figures.
-- If a value genuinely does not appear and cannot be derived, use null. Do not invent numbers.
-- EXCEPTION - "name" and "processor" must NEVER be null or empty. Every statement identifies the merchant and the processor somewhere. If neither is explicitly labeled, use your best evidence candidate: the DBA line, the merchant header, the address block, the remittance/logo block, or the entity the statement is addressed to. Pick the strongest candidate present rather than returning null.
+CORE-FIGURE RULE: monthly_volume, total_fees, and transaction_count must be "EXTRACTED" (page + verbatim) or "DERIVED" (formula) - NEVER "ESTIMATED". If one is genuinely absent and cannot be derived, set its value to null and flag it in its provenance entry (class "ESTIMATED", confidence below 0.3) so the audit routes to human review.
 
-PROVENANCE (NEW - an evidence trail you populate IN ADDITION to every field above, never instead of any of them):
-Also return a "provenance" object that traces the key figures listed in the schema to their source on the statement. For each figure set "class" to exactly one of:
-- "EXTRACTED" - the figure is printed on the statement. REQUIRED: "page" (the 1-based page it appears on) and "quote" (the exact text as printed - the line's label plus its amount, copied verbatim, e.g. Total Fees $1,234.56). Keep each quote to the single shortest span that proves the number. Set "basis" to null.
-- "DERIVED" - you computed it from other figures. REQUIRED: "basis" (the formula, e.g. total_fees/monthly_volume*100). Set "page" and "quote" to null.
-- "ESTIMATED" - neither printed nor derivable; a reasoned estimate only. Set "page", "quote", and "basis" to null and use a "confidence" below 0.5.
-"confidence" is your 0-1 certainty for that one figure.
-Citing the page: text input is delimited by "===== PAGE n OF m =====" markers; PDF/image input shows the printed pages - cite the 1-based page where the figure actually appears.
-CORE-FIGURE RULE: monthly_volume, total_fees, and transaction_count must be "EXTRACTED" (with page + verbatim quote) or "DERIVED" (with basis) - NEVER "ESTIMATED". If one is genuinely absent and cannot be derived, set its "value" to null, "class" to "ESTIMATED", and "confidence" below 0.3 so the audit is routed to human review.
-QUOTE SAFETY: inside "quote", never use the double-quote character (") - if the source text contains one, replace it with a single quote - and keep each quote on one short line so the JSON stays valid.
-
-Return ONLY a valid JSON object. No markdown fences, no preamble, no trailing text. Start with { and end with }.
+Return ONLY one valid JSON object - no markdown fences, no preamble, no trailing text. Start with { and end with }. Inside any "verbatim"/"quote" string never use the double-quote character (replace it with a single quote) and keep it to one short line so the JSON stays valid.
 
 Schema:
 {
@@ -102,13 +97,26 @@ Schema:
     "processor_markup":  {"value": <float|null>, "class": "EXTRACTED|DERIVED|ESTIMATED", "page": <int|null>, "quote": "<verbatim or null>", "basis": "<formula or null>", "confidence": <float 0-1>},
     "effective_rate":    {"value": <float|null>, "class": "DERIVED|EXTRACTED|ESTIMATED", "page": <int|null>, "quote": "<verbatim or null>", "basis": "total_fees/monthly_volume*100", "confidence": <float 0-1>}
   },
-  "line_items": [{"name":"<fee name>","category":"interchange|processor|monthly|misc","amount":<float>,"benchmark":<float>,"note":"<1-sentence>"}],
-  "findings": [{"text":"<specific finding with exact $ amounts>","severity":"high|medium|low","savings":<annual $ float>}]
+  "line_items": [
+    {"name":"<fee/line label exactly as printed>","category":"interchange|processor|monthly|misc","amount":<float>,"page":<int>,"verbatim":"<exact printed text for this line>","class":"EXTRACTED|DERIVED","benchmark":<float|null - external market reference ONLY, never a statement value>,"note":"<1 factual sentence; for DERIVED put the formula here>"}
+  ],
+  "not_found": [
+    {"label":"<expected fee or figure that is absent from the statement>","status":"NOT_FOUND"}
+  ],
+  "discrepancies": [
+    {"label":"<item that conflicts across pages>","page_a":<int>,"value_a":<float>,"page_b":<int>,"value_b":<float>}
+  ],
+  "findings": [
+    {"text":"<finding citing the exact EXTRACTED dollar amount>","severity":"high|medium|low","savings":<annual $ float>,"page":<int>,"verbatim":"<the printed text this finding is based on>","class":"EXTRACTED|DERIVED"}
+  ]
 }
 
-Include EVERY fee line item visible across ALL pages in line_items.
-For findings: flag every fee above benchmark, every negotiable charge, every downgrade opportunity, citing exact dollar amounts. Do not stop until every page and every line item has been accounted for.
-Populate the provenance object for all six listed figures - each with its class, a page + verbatim quote (EXTRACTED) or basis formula (DERIVED), and a confidence."""
+Rules for line_items and findings:
+- Every line_item and every finding MUST be "EXTRACTED" (with its page + verbatim text) or "DERIVED" (with the formula in "note"/"text"). If you cannot ground it in the statement, it does NOT belong in line_items or findings - put it in "not_found".
+- Include EVERY fee line item visible across ALL pages in line_items. Do not stop until every page and every printed line item is accounted for.
+- "benchmark" is an external market reference, not a value from this statement. Set it to null unless you are citing a real, known industry benchmark, and never let a benchmark masquerade as an extracted figure.
+- For findings, flag every fee above benchmark, every negotiable charge, and every downgrade opportunity, citing the exact EXTRACTED dollar amount and the page it came from.
+- Populate the provenance object for all six listed figures, each with its class, a page + verbatim quote (EXTRACTED) or basis formula (DERIVED), and a confidence."""
 
 
 # ────────────────────────────────────────────────────────────
@@ -142,33 +150,211 @@ def _http_timeout() -> httpx.Timeout:
 
 
 # ────────────────────────────────────────────────────────────
-#  Provider calls
-#  Each receives: native base64 (file_b64), media_type, and pdf_text
-#  (extracted text for PDFs; empty for images/plain text input).
+#  Multi-page normalization (STEP 2)
+#  Turn an uploaded file list into ordered, labeled content units so EVERY page
+#  reaches EVERY provider. Photos -> image units; digital PDFs -> per-page text
+#  units; scanned PDFs -> rasterized image units; text/csv -> text units. Large
+#  images are downscaled to stay under provider per-image limits. The pypdf /
+#  PyMuPDF / Pillow imports are lazy and degrade gracefully if a lib is missing.
 # ────────────────────────────────────────────────────────────
-async def _call_anthropic(file_b64: str, media_type: str, pdf_text: str) -> Optional[Dict]:
-    if not settings.ANTHROPIC_API_KEY:
+_PDF_TEXT_MIN_CHARS = 200   # below this total, treat the PDF as scanned -> rasterize
+_MAX_IMG_DIM = 1568         # long-edge px (Anthropic's recommended max; bounds tokens+size)
+_RASTER_DPI = 150           # rasterization resolution for scanned PDFs
+_MAX_RASTER_PAGES = 15      # safety cap on pages rasterized from one PDF
+
+
+def _downscale_image_bytes(raw: bytes) -> Optional[bytes]:
+    """Re-encode to a provider-safe JPEG, downscaling if the long edge exceeds
+    _MAX_IMG_DIM. Returns None if Pillow is unavailable (caller keeps original)."""
+    try:
+        from PIL import Image
+    except ImportError:
+        logger.warning("Pillow not installed — sending image as-is; add 'Pillow' to requirements.txt")
+        return None
+    try:
+        im = Image.open(io.BytesIO(raw)).convert("RGB")
+        if max(im.size) > _MAX_IMG_DIM:
+            ratio = _MAX_IMG_DIM / float(max(im.size))
+            im = im.resize((max(1, int(im.width * ratio)), max(1, int(im.height * ratio))))
+        buf = io.BytesIO()
+        im.save(buf, format="JPEG", quality=85)
+        return buf.getvalue()
+    except Exception as e:
+        logger.warning("image downscale failed: %s", e)
         return None
 
-    is_pdf = media_type == "application/pdf"
-    is_image = media_type.startswith("image/")
 
+def _prep_image_unit(b64: str, media_type: str) -> Optional[Dict[str, Any]]:
+    """Decode, normalize (JPEG + bounded size), and return an image content unit."""
+    try:
+        raw = base64.b64decode(b64)
+    except Exception:
+        return None
+    small = _downscale_image_bytes(raw)
+    if small is None:
+        return {"kind": "image", "b64": b64, "media_type": media_type or "image/jpeg"}
+    return {"kind": "image", "b64": base64.b64encode(small).decode("ascii"), "media_type": "image/jpeg"}
+
+
+def _rasterize_pdf(raw: bytes) -> List[str]:
+    """Render each PDF page to a downscaled JPEG (base64). Empty list if PyMuPDF
+    is unavailable or rendering fails (caller then falls back gracefully)."""
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        logger.error("PyMuPDF (fitz) not installed — cannot rasterize scanned PDF; "
+                     "add 'PyMuPDF' to requirements.txt")
+        return []
+    out: List[str] = []
+    try:
+        doc = fitz.open(stream=raw, filetype="pdf")
+        try:
+            for i, page in enumerate(doc):
+                if i >= _MAX_RASTER_PAGES:
+                    break
+                png = page.get_pixmap(dpi=_RASTER_DPI).tobytes("png")
+                small = _downscale_image_bytes(png) or png
+                out.append(base64.b64encode(small).decode("ascii"))
+        finally:
+            doc.close()
+    except Exception as e:
+        logger.warning("PDF rasterization failed: %s", e)
+        return []
+    return out
+
+
+def _pdf_to_units(b64: str) -> List[Dict[str, Any]]:
+    """Per-page text units if the PDF has a real text layer; otherwise rasterize
+    each page to an image unit so text-only providers can still read it."""
+    try:
+        raw = base64.b64decode(b64)
+    except Exception:
+        return []
+    page_texts: List[str] = []
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(raw))
+        page_texts = [(p.extract_text() or "").strip() for p in reader.pages]
+    except Exception as e:
+        logger.warning("pdf text read failed: %s", e)
+    if page_texts and sum(len(t) for t in page_texts) >= _PDF_TEXT_MIN_CHARS:
+        total = len(page_texts)
+        return [{"kind": "text", "text": f"===== PAGE {i} OF {total} =====\n{t}"}
+                for i, t in enumerate(page_texts, 1)]
+    # scanned / no text layer -> rasterize so ALL providers (incl. GPT-4o, Grok) can read it
+    return [{"kind": "image", "b64": b, "media_type": "image/jpeg"} for b in _rasterize_pdf(raw)]
+
+
+def _b64_to_text(b64: str) -> str:
+    try:
+        return base64.b64decode(b64).decode("utf-8", errors="replace").strip()
+    except Exception:
+        return ""
+
+
+def _normalize_pages(pages: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+    """Flatten an uploaded file list into ordered, labeled content units."""
+    units: List[Dict[str, Any]] = []
+    for f in pages or []:
+        f = f or {}
+        b64 = f.get("base64") or f.get("data") or ""
+        mt = (f.get("media_type") or f.get("type") or "").lower()
+        if not b64:
+            continue
+        if mt.startswith("image/"):
+            u = _prep_image_unit(b64, mt)
+            if u:
+                units.append(u)
+        elif mt == "application/pdf":
+            units.extend(_pdf_to_units(b64))
+        else:
+            txt = _b64_to_text(b64)
+            if txt:
+                units.append({"kind": "text", "text": txt})
+    total = len(units)
+    for i, u in enumerate(units, 1):
+        u["label"] = f"Page {i} of {total}"
+    return units
+
+
+def _units_have_images(units: List[Dict[str, Any]]) -> bool:
+    return any(u.get("kind") == "image" for u in units)
+
+
+# Provider-specific builders: label + block per page, then the extraction prompt last.
+def _anthropic_content(units: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     content: List[Dict[str, Any]] = []
-    if is_pdf:
-        content.append({"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": file_b64}})
-    elif is_image:
-        content.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": file_b64}})
-    else:
-        content.append({"type": "text", "text": f"MERCHANT PROCESSING STATEMENT:\n\n{file_b64}"})
+    for u in units:
+        content.append({"type": "text", "text": u["label"] + ":"})
+        if u["kind"] == "image":
+            content.append({"type": "image", "source": {"type": "base64",
+                            "media_type": u["media_type"], "data": u["b64"]}})
+        else:
+            content.append({"type": "text", "text": u["text"]})
     content.append({"type": "text", "text": AI_EXTRACTION_PROMPT})
+    return content
+
+
+def _openai_style_content(units: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """OpenAI- and Grok-compatible chat content (image_url + text blocks)."""
+    content: List[Dict[str, Any]] = []
+    for u in units:
+        content.append({"type": "text", "text": u["label"] + ":"})
+        if u["kind"] == "image":
+            content.append({"type": "image_url",
+                            "image_url": {"url": f"data:{u['media_type']};base64,{u['b64']}"}})
+        else:
+            content.append({"type": "text", "text": u["text"]})
+    content.append({"type": "text", "text": AI_EXTRACTION_PROMPT})
+    return content
+
+
+def _gemini_parts(units: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    parts: List[Dict[str, Any]] = []
+    for u in units:
+        parts.append({"text": u["label"] + ":"})
+        if u["kind"] == "image":
+            parts.append({"inlineData": {"mimeType": u["media_type"], "data": u["b64"]}})
+        else:
+            parts.append({"text": u["text"]})
+    parts.append({"text": AI_EXTRACTION_PROMPT})
+    return parts
+
+
+# ────────────────────────────────────────────────────────────
+#  Provider calls
+#  Each receives: native base64 (file_b64), media_type, pdf_text (extracted text
+#  for single-file PDFs), and optional `units` (normalized multi-page content).
+#  When `units` is provided it takes precedence; otherwise the legacy single-file
+#  path runs unchanged.
+# ────────────────────────────────────────────────────────────
+async def _call_anthropic(file_b64: str, media_type: str, pdf_text: str,
+                          units: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict]:
+    if not settings.ANTHROPIC_API_KEY:
+        return None
 
     headers = {
         "x-api-key": settings.ANTHROPIC_API_KEY,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     }
-    if is_pdf:
-        headers["anthropic-beta"] = "pdfs-2024-09-25"
+
+    if units is not None:
+        # Multi-page: every page as a labeled content block (image or text).
+        content = _anthropic_content(units)
+    else:
+        # Legacy single-file path (unchanged).
+        is_pdf = media_type == "application/pdf"
+        is_image = media_type.startswith("image/")
+        content: List[Dict[str, Any]] = []
+        if is_pdf:
+            content.append({"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": file_b64}})
+            headers["anthropic-beta"] = "pdfs-2024-09-25"
+        elif is_image:
+            content.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": file_b64}})
+        else:
+            content.append({"type": "text", "text": f"MERCHANT PROCESSING STATEMENT:\n\n{file_b64}"})
+        content.append({"type": "text", "text": AI_EXTRACTION_PROMPT})
 
     async with httpx.AsyncClient(timeout=_http_timeout()) as client:
         resp = await client.post(
@@ -189,24 +375,28 @@ async def _call_anthropic(file_b64: str, media_type: str, pdf_text: str) -> Opti
     return {"provider": "Claude", "raw": text}
 
 
-async def _call_openai(file_b64: str, media_type: str, pdf_text: str) -> Optional[Dict]:
+async def _call_openai(file_b64: str, media_type: str, pdf_text: str,
+                       units: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict]:
     if not settings.OPENAI_API_KEY:
         return None
 
-    is_image = media_type.startswith("image/")
-    is_pdf = media_type == "application/pdf"
-
-    msg_content: List[Dict[str, Any]] = []
-    if is_image:
-        msg_content.append({"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{file_b64}"}})
-        msg_content.append({"type": "text", "text": AI_EXTRACTION_PROMPT})
-    elif is_pdf:
-        if not pdf_text:
-            raise Exception("PDF has no extractable text layer (likely scanned). "
-                            "GPT-4o needs text or an image; Claude/Gemini handled it via vision.")
-        msg_content.append({"type": "text", "text": f"MERCHANT PROCESSING STATEMENT (all pages):\n\n{pdf_text}\n\n{AI_EXTRACTION_PROMPT}"})
+    if units is not None:
+        # Multi-page: labeled image_url/text blocks (scanned pages arrive as images).
+        msg_content = _openai_style_content(units)
     else:
-        msg_content.append({"type": "text", "text": f"MERCHANT PROCESSING STATEMENT:\n\n{file_b64}\n\n{AI_EXTRACTION_PROMPT}"})
+        is_image = media_type.startswith("image/")
+        is_pdf = media_type == "application/pdf"
+        msg_content: List[Dict[str, Any]] = []
+        if is_image:
+            msg_content.append({"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{file_b64}"}})
+            msg_content.append({"type": "text", "text": AI_EXTRACTION_PROMPT})
+        elif is_pdf:
+            if not pdf_text:
+                raise Exception("PDF has no extractable text layer (likely scanned). "
+                                "GPT-4o needs text or an image; Claude/Gemini handled it via vision.")
+            msg_content.append({"type": "text", "text": f"MERCHANT PROCESSING STATEMENT (all pages):\n\n{pdf_text}\n\n{AI_EXTRACTION_PROMPT}"})
+        else:
+            msg_content.append({"type": "text", "text": f"MERCHANT PROCESSING STATEMENT:\n\n{file_b64}\n\n{AI_EXTRACTION_PROMPT}"})
 
     async with httpx.AsyncClient(timeout=_http_timeout()) as client:
         resp = await client.post(
@@ -228,16 +418,20 @@ async def _call_openai(file_b64: str, media_type: str, pdf_text: str) -> Optiona
     return {"provider": "GPT-4o", "raw": text}
 
 
-async def _call_gemini(file_b64: str, media_type: str, pdf_text: str) -> Optional[Dict]:
+async def _call_gemini(file_b64: str, media_type: str, pdf_text: str,
+                       units: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict]:
     if not settings.GOOGLE_API_KEY:
         return None
 
-    parts: List[Dict[str, Any]] = []
-    if media_type == "application/pdf" or media_type.startswith("image/"):
-        parts.append({"inlineData": {"mimeType": media_type, "data": file_b64}})
+    if units is not None:
+        parts = _gemini_parts(units)
     else:
-        parts.append({"text": f"MERCHANT PROCESSING STATEMENT:\n\n{file_b64}"})
-    parts.append({"text": AI_EXTRACTION_PROMPT})
+        parts: List[Dict[str, Any]] = []
+        if media_type == "application/pdf" or media_type.startswith("image/"):
+            parts.append({"inlineData": {"mimeType": media_type, "data": file_b64}})
+        else:
+            parts.append({"text": f"MERCHANT PROCESSING STATEMENT:\n\n{file_b64}"})
+        parts.append({"text": AI_EXTRACTION_PROMPT})
 
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
            f"{settings.GEMINI_MODEL}:generateContent?key={settings.GOOGLE_API_KEY}")
@@ -259,30 +453,42 @@ async def _call_gemini(file_b64: str, media_type: str, pdf_text: str) -> Optiona
     return {"provider": "Gemini", "raw": text}
 
 
-async def _call_grok(file_b64: str, media_type: str, pdf_text: str) -> Optional[Dict]:
+async def _call_grok(file_b64: str, media_type: str, pdf_text: str,
+                     units: Optional[List[Dict[str, Any]]] = None) -> Optional[Dict]:
     if not settings.GROK_API_KEY:
         return None
 
-    is_image = media_type.startswith("image/")
-    is_pdf = media_type == "application/pdf"
-
-    if is_image:
-        if not settings.GROK_VISION_MODEL:
-            raise Exception("Image input: GROK_VISION_MODEL not set, skipping Grok for this image.")
-        model = settings.GROK_VISION_MODEL
-        msg_content = [
-            {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{file_b64}"}},
-            {"type": "text", "text": AI_EXTRACTION_PROMPT},
-        ]
-    else:
-        model = settings.GROK_MODEL
-        if is_pdf:
-            if not pdf_text:
-                raise Exception("PDF has no extractable text layer (likely scanned); Grok needs text input.")
-            body_text = f"MERCHANT PROCESSING STATEMENT (all pages):\n\n{pdf_text}\n\n{AI_EXTRACTION_PROMPT}"
+    if units is not None:
+        # Multi-page: vision model when any page is an image (photos / rasterized
+        # scans), text model when every page is text.
+        if _units_have_images(units):
+            if not settings.GROK_VISION_MODEL:
+                raise Exception("Image/scanned pages present but GROK_VISION_MODEL is not set — "
+                                "set it in Render (e.g. grok-2-vision-1212) so Grok can read images.")
+            model = settings.GROK_VISION_MODEL
         else:
-            body_text = f"MERCHANT PROCESSING STATEMENT:\n\n{file_b64}\n\n{AI_EXTRACTION_PROMPT}"
-        msg_content = [{"type": "text", "text": body_text}]
+            model = settings.GROK_MODEL
+        msg_content = _openai_style_content(units)
+    else:
+        is_image = media_type.startswith("image/")
+        is_pdf = media_type == "application/pdf"
+        if is_image:
+            if not settings.GROK_VISION_MODEL:
+                raise Exception("Image input: GROK_VISION_MODEL not set, skipping Grok for this image.")
+            model = settings.GROK_VISION_MODEL
+            msg_content = [
+                {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{file_b64}"}},
+                {"type": "text", "text": AI_EXTRACTION_PROMPT},
+            ]
+        else:
+            model = settings.GROK_MODEL
+            if is_pdf:
+                if not pdf_text:
+                    raise Exception("PDF has no extractable text layer (likely scanned); Grok needs text input.")
+                body_text = f"MERCHANT PROCESSING STATEMENT (all pages):\n\n{pdf_text}\n\n{AI_EXTRACTION_PROMPT}"
+            else:
+                body_text = f"MERCHANT PROCESSING STATEMENT:\n\n{file_b64}\n\n{AI_EXTRACTION_PROMPT}"
+            msg_content = [{"type": "text", "text": body_text}]
 
     async with httpx.AsyncClient(timeout=_http_timeout()) as client:
         resp = await client.post(
@@ -358,13 +564,26 @@ def _provider_summary(r: Dict) -> Dict[str, Any]:
     }
 
 
-async def run_audit_all_providers(file_b64: str, media_type: str) -> Dict[str, Any]:
+async def run_audit_all_providers(file_b64: str, media_type: str,
+                                  pages: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
     """
     Run extraction across all configured AI providers in parallel and return
     consensus. Per-provider failures are recorded in result["_errors"] and logged.
+
+    `pages` (optional): an ordered list of uploaded files [{"base64","media_type"}].
+    When provided, every page is normalized (photos / digital PDF / scanned PDF /
+    text) and handed to EVERY provider as a labeled content block ("Page 1 of N").
+    When omitted, the single-file file_b64/media_type path runs unchanged
+    (back-compat for /api/audit/run).
     """
-    # Extract PDF text ONCE so text-only providers (GPT-4o, Grok) see every page.
-    pdf_text = _extract_pdf_text(file_b64) if media_type == "application/pdf" else ""
+    # Multi-page normalization; falls back to the single-file path if nothing usable.
+    units = _normalize_pages(pages) if pages else None
+    if not units:
+        units = None
+
+    # Extract PDF text ONCE so text-only providers see every page (single-file path
+    # only; the units path already carries per-page content).
+    pdf_text = _extract_pdf_text(file_b64) if (units is None and media_type == "application/pdf") else ""
 
     providers = []
     if settings.ANTHROPIC_API_KEY:
@@ -384,7 +603,7 @@ async def run_audit_all_providers(file_b64: str, media_type: str) -> Dict[str, A
 
     async def _run(name, func):
         try:
-            raw_result = await func(file_b64, media_type, pdf_text)
+            raw_result = await func(file_b64, media_type, pdf_text, units)
             if raw_result:
                 parsed = _parse_ai_json(raw_result["raw"])
                 parsed["_provider"] = name
