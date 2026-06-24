@@ -49,7 +49,7 @@ PROCESS - do this in order, do not skip:
 
 CORE-FIGURE RULE: monthly_volume, total_fees, and transaction_count must be "EXTRACTED" (page + verbatim) or "DERIVED" (formula) - NEVER "ESTIMATED". If one is genuinely absent and cannot be derived, set its value to null and flag it in its provenance entry (class "ESTIMATED", confidence below 0.3) so the audit routes to human review.
 
-Return ONLY one valid JSON object - no markdown fences, no preamble, no trailing text. Start with { and end with }. Inside any "verbatim"/"quote" string never use the double-quote character (replace it with a single quote) and keep it to one short line so the JSON stays valid.
+Return ONLY one valid JSON object - no markdown fences, no preamble, no trailing text. Start with { and end with }. Inside any "verbatim"/"quote" string: never use the double-quote character (replace it with a single quote), and keep it to AT MOST 10 WORDS - the fee label plus its amount, never the whole line or paragraph - so the JSON stays compact and does not truncate.
 
 Schema:
 {
@@ -98,7 +98,7 @@ Schema:
     "effective_rate":    {"value": <float|null>, "class": "DERIVED|EXTRACTED|ESTIMATED", "page": <int|null>, "quote": "<verbatim or null>", "basis": "total_fees/monthly_volume*100", "confidence": <float 0-1>}
   },
   "line_items": [
-    {"name":"<fee/line label exactly as printed>","category":"interchange|processor|monthly|misc","amount":<float>,"page":<int>,"verbatim":"<exact printed text for this line>","class":"EXTRACTED|DERIVED","benchmark":<float|null - external market reference ONLY, never a statement value>,"note":"<1 factual sentence; for DERIVED put the formula here>"}
+    {"name":"<fee/line label exactly as printed>","category":"interchange|processor|monthly|misc","amount":<float>,"page":<int>,"verbatim":"<label + amount as printed, <=10 words>","class":"EXTRACTED|DERIVED","benchmark":<float|null - external market reference ONLY, never a statement value>,"note":"<1 factual sentence; for DERIVED put the formula here>"}
   ],
   "not_found": [
     {"label":"<expected fee or figure that is absent from the statement>","status":"NOT_FOUND"}
@@ -107,7 +107,7 @@ Schema:
     {"label":"<item that conflicts across pages>","page_a":<int>,"value_a":<float>,"page_b":<int>,"value_b":<float>}
   ],
   "findings": [
-    {"text":"<finding citing the exact EXTRACTED dollar amount>","severity":"high|medium|low","savings":<annual $ float>,"page":<int>,"verbatim":"<the printed text this finding is based on>","class":"EXTRACTED|DERIVED"}
+    {"text":"<finding citing the exact EXTRACTED dollar amount>","severity":"high|medium|low","savings":<annual $ float>,"page":<int>,"verbatim":"<label + amount as printed, <=10 words>","class":"EXTRACTED|DERIVED"}
   ]
 }
 
@@ -477,7 +477,7 @@ async def _call_grok(file_b64: str, media_type: str, pdf_text: str,
         if _units_have_images(units):
             if not settings.GROK_VISION_MODEL:
                 raise Exception("Image/scanned pages present but GROK_VISION_MODEL is not set — "
-                                "set it in Render (e.g. grok-2-vision-1212) so Grok can read images.")
+                                "set it in Render (e.g. grok-4.3) so Grok can read images.")
             model = settings.GROK_VISION_MODEL
         else:
             model = settings.GROK_MODEL

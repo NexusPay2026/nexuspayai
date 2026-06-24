@@ -42,16 +42,17 @@ class Settings:
 
     # ── AI Model Names (env-overridable; defaults are known-good) ──
     # To upgrade a model, set the matching env var in Render — no code change.
-    ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+    ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
     OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o")
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-    GROK_MODEL: str = os.getenv("GROK_MODEL", "grok-3")
-    # Optional vision-capable Grok model for image statements (leave blank to skip Grok on images)
-    GROK_VISION_MODEL: str = os.getenv("GROK_VISION_MODEL", "")
+    GROK_MODEL: str = os.getenv("GROK_MODEL", "grok-4.3")
+    # Grok model for image statements. Vision is built into xAI's current model
+    # (grok-4.3), so there is no separate vision slug — same value as GROK_MODEL.
+    GROK_VISION_MODEL: str = os.getenv("GROK_VISION_MODEL", "grok-4.3")
 
     # ── AI Generation Tuning (accuracy-first) ────────────────
     # max_tokens raised so multi-page line-item JSON is never truncated.
-    AI_MAX_TOKENS: int = int(os.getenv("AI_MAX_TOKENS", "8192"))
+    AI_MAX_TOKENS: int = int(os.getenv("AI_MAX_TOKENS", "16000"))
     # temperature 0 = deterministic arithmetic; best for accounting/math reliability.
     AI_TEMPERATURE: float = float(os.getenv("AI_TEMPERATURE", "0"))
     # per-call HTTP timeout in seconds (Render cold starts + large PDFs)

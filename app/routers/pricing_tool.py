@@ -188,7 +188,7 @@ async def _call_proposal(prompt: str) -> str:
                 if name == "claude":
                     r = await c.post("https://api.anthropic.com/v1/messages",
                         headers={"x-api-key": settings.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-                        json={"model": "claude-sonnet-4-20250514", "max_tokens": 1000, "messages": [{"role": "user", "content": prompt}]})
+                        json={"model": "claude-sonnet-4-6", "max_tokens": 1000, "messages": [{"role": "user", "content": prompt}]})
                     d = r.json()
                     return "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
                 elif name == "openai":
@@ -204,7 +204,7 @@ async def _call_proposal(prompt: str) -> str:
                 elif name == "grok":
                     r = await c.post("https://api.x.ai/v1/chat/completions",
                         headers={"Authorization": f"Bearer {settings.GROK_API_KEY}", "Content-Type": "application/json"},
-                        json={"model": "grok-3", "max_tokens": 1000, "messages": [{"role": "user", "content": prompt}]})
+                        json={"model": "grok-4.3", "max_tokens": 1000, "messages": [{"role": "user", "content": prompt}]})
                     return r.json()["choices"][0]["message"]["content"]
             except Exception as ex:
                 last = f"{name}: {ex}"
@@ -370,7 +370,7 @@ async def _run_proposal_consensus(prompt: str) -> Dict[str, Any]:
                 if key == "claude":
                     r = await c.post("https://api.anthropic.com/v1/messages",
                         headers={"x-api-key": settings.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-                        json={"model": "claude-sonnet-4-20250514", "max_tokens": 1000, "messages": [{"role": "user", "content": prompt}]})
+                        json={"model": "claude-sonnet-4-6", "max_tokens": 1000, "messages": [{"role": "user", "content": prompt}]})
                     d = r.json()
                     txt = "".join(b.get("text", "") for b in d.get("content", []) if b.get("type") == "text")
                     results.append({"provider": name, "text": txt})
@@ -387,7 +387,7 @@ async def _run_proposal_consensus(prompt: str) -> Dict[str, Any]:
                 elif key == "grok":
                     r = await c.post("https://api.x.ai/v1/chat/completions",
                         headers={"Authorization": f"Bearer {settings.GROK_API_KEY}", "Content-Type": "application/json"},
-                        json={"model": "grok-3", "max_tokens": 1000, "temperature": 0.3, "messages": [{"role": "user", "content": prompt}]})
+                        json={"model": "grok-4.3", "max_tokens": 1000, "temperature": 0.3, "messages": [{"role": "user", "content": prompt}]})
                     results.append({"provider": name, "text": r.json()["choices"][0]["message"]["content"]})
         except Exception as e:
             errors.append({"provider": name, "error": str(e)})

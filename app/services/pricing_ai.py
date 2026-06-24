@@ -161,7 +161,7 @@ async def _ai_anthropic(prompt: str) -> Optional[Dict]:
     async with httpx.AsyncClient(timeout=90) as c:
         r = await c.post("https://api.anthropic.com/v1/messages",
             headers={"x-api-key": settings.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-            json={"model": "claude-sonnet-4-20250514", "max_tokens": 2048, "messages": [{"role": "user", "content": prompt}]})
+            json={"model": "claude-sonnet-4-6", "max_tokens": 2048, "messages": [{"role": "user", "content": prompt}]})
     if r.status_code != 200:
         raise Exception(f"Claude: {r.status_code}")
     return {"provider": "Claude", "raw": r.json()["content"][0]["text"]}
@@ -198,7 +198,7 @@ async def _ai_grok(prompt: str) -> Optional[Dict]:
     async with httpx.AsyncClient(timeout=90) as c:
         r = await c.post("https://api.x.ai/v1/chat/completions",
             headers={"Authorization": f"Bearer {settings.GROK_API_KEY}", "Content-Type": "application/json"},
-            json={"model": "grok-3", "max_tokens": 2048, "temperature": 0.2, "messages": [{"role": "user", "content": prompt}]})
+            json={"model": "grok-4.3", "max_tokens": 2048, "temperature": 0.2, "messages": [{"role": "user", "content": prompt}]})
     if r.status_code != 200:
         raise Exception(f"Grok: {r.status_code}")
     return {"provider": "Grok", "raw": r.json()["choices"][0]["message"]["content"]}
