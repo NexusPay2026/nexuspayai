@@ -37,7 +37,7 @@ logger = logging.getLogger("nexuspay.ai")
 
 # Engine version — bump on any model/prompt/pipeline change to auto-invalidate
 # cached audit results (the portal cache is quality-gated AND version-gated).
-ENGINE_VERSION = "2026-06-24"
+ENGINE_VERSION = "2026-06-25"
 
 # Per-provider completion-token ceilings. AI_MAX_TOKENS is the desired budget;
 # each provider clamps to its OWN hard limit so one global number can never 400 a
@@ -58,7 +58,37 @@ def _max_tokens(provider: str) -> int:
 # Per-provider wall-clock cap for the audit gather. The promise is ACCURATE results
 # within ~90s, NOT waiting for every provider — a slow/hung provider (e.g. Claude
 # ReadTimeout) becomes a named _error and the providers that returned are used.
-_PROVIDER_TIMEOUT_S = int(os.getenv("AI_PROVIDER_TIMEOUT", "78"))
+# 90s leaves ~15-20s headroom under the 120s frontend AbortController (upload +
+# rasterize + parse). Env-overridable; keep <= ~100 unless the frontend cap is raised too.
+_PROVIDER_TIMEOUT_S = int(os.getenv("AI_PROVIDER_TIMEOUT", "90"))
+# ONE retry on a FAST transient failure (busy/blip/truncated-JSON), after this backoff.
+# The retry runs INSIDE the per-provider wait_for budget above, so it can never exceed
+# the cap or blow the 120s frontend budget: a slow call is cancelled by wait_for ->
+# timeout and is NOT retried (a second full attempt would not fit, and a consistently
+# slow provider like image-bound Claude won't recover on retry — Tier 2 image
+# downscaling is what speeds those up).
+_RETRY_BACKOFF_S = float(os.getenv("AI_RETRY_BACKOFF", "1.5"))
+
+# Transient upstream statuses (provider busy / rate-limited / overloaded) worth one retry.
+_TRANSIENT_STATUS = ("429", "500", "502", "503", "529")
+_TRANSIENT_KEYWORDS = ("unavailable", "overloaded", "high demand", "rate limit", "temporarily")
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """True ONLY for fast transient failures a single retry can plausibly fix: a
+    salvage-failed (usually truncated) JSON parse, an httpx connection blip, or a
+    transient upstream status (429/5xx/529 'overloaded'). Hard errors (401 auth, 400
+    bad request, 404) are NOT retried. A slow call never reaches here — wait_for cancels
+    it with a BaseException-level CancelledError, surfaced by _run as a timeout."""
+    if isinstance(exc, ValueError):
+        return True   # _parse_ai_json raised -> response was malformed/truncated
+    if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadError,
+                        httpx.WriteError, httpx.RemoteProtocolError, httpx.PoolTimeout)):
+        return True
+    msg = str(exc).lower()
+    if "api error" in msg and any(s in msg for s in _TRANSIENT_STATUS):
+        return True
+    return any(k in msg for k in _TRANSIENT_KEYWORDS)
 
 AI_EXTRACTION_PROMPT = """You are a forensic payment-processing audit TEAM with CPA-level numerical discipline. Treat this engagement like forensic accounting: every number you report must be traceable to the exact page and the exact printed text it came from.
 
@@ -217,8 +247,10 @@ def _http_timeout() -> httpx.Timeout:
 #  PyMuPDF / Pillow imports are lazy and degrade gracefully if a lib is missing.
 # ────────────────────────────────────────────────────────────
 _PDF_TEXT_MIN_CHARS = 200   # below this total, treat the PDF as scanned -> rasterize
-_MAX_IMG_DIM = 1568         # long-edge px (Anthropic's recommended max; bounds tokens+size)
-_RASTER_DPI = 150           # rasterization resolution for scanned PDFs
+_MAX_IMG_DIM = 1400         # long-edge px cap (was 1568): fewer image tokens to ALL 4
+                            # providers + faster vision processing, still legible.
+_RASTER_DPI = 120           # scanned-PDF raster resolution (was 150): pixmap memory
+                            # scales with DPI^2, so 150->120 cuts it ~36%; text stays readable.
 _MAX_RASTER_PAGES = 15      # safety cap on pages rasterized from one PDF
 
 
@@ -268,12 +300,25 @@ def _rasterize_pdf(raw: bytes) -> List[str]:
     try:
         doc = fitz.open(stream=raw, filetype="pdf")
         try:
+            zoom_dpi = _RASTER_DPI / 72.0
             for i, page in enumerate(doc):
                 if i >= _MAX_RASTER_PAGES:
                     break
-                png = page.get_pixmap(dpi=_RASTER_DPI).tobytes("png")
-                small = _downscale_image_bytes(png) or png
-                out.append(base64.b64encode(small).decode("ascii"))
+                # Render at the SMALLER of _RASTER_DPI and the zoom that caps the long
+                # edge at _MAX_IMG_DIM, so the pixmap is born small — we never build a
+                # full-DPI bitmap or a PNG + Pillow RGB copy (the old path's peak spike).
+                long_pts = max(page.rect.width, page.rect.height) or 1.0
+                zoom = min(zoom_dpi, _MAX_IMG_DIM / long_pts)
+                pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+                try:
+                    jpg = pix.tobytes(output="jpg", jpg_quality=85)   # native JPEG, no PIL
+                except Exception:
+                    png = pix.tobytes("png")                          # older-PyMuPDF fallback
+                    jpg = _downscale_image_bytes(png) or png
+                    del png
+                out.append(base64.b64encode(jpg).decode("ascii"))
+                pix = None                                            # release native bitmap now
+                del jpg
         finally:
             doc.close()
     except Exception as e:
@@ -730,17 +775,32 @@ async def run_audit_all_providers(file_b64: str, media_type: str,
     results: List[Dict] = []
     errors: List[Dict] = []
 
+    async def _attempt(name, func):
+        """One call + parse, with ONE retry on a fast transient failure. Runs entirely
+        inside the wait_for budget in _run, so the retry uses leftover slack and can
+        never exceed the per-provider cap (a slow call is cancelled by wait_for and is
+        surfaced as a timeout, not retried)."""
+        for attempt in (1, 2):
+            try:
+                raw_result = await func(file_b64, media_type, pdf_text, units)
+                if not raw_result:
+                    raise ValueError("empty provider response")
+                return _parse_ai_json(raw_result["raw"])   # raises ValueError on bad JSON
+            except Exception as e:
+                if attempt == 1 and _is_retryable(e):
+                    logger.info("Provider RETRY: %s after transient failure — %s", name, e)
+                    await asyncio.sleep(_RETRY_BACKOFF_S)
+                    continue
+                raise
+
     async def _run(name, func):
         try:
-            # Cap each provider so one slow/hung one can't blow the ~90s budget —
-            # it becomes a named timeout error and the rest still count.
-            raw_result = await asyncio.wait_for(
-                func(file_b64, media_type, pdf_text, units), timeout=_PROVIDER_TIMEOUT_S)
-            if raw_result:
-                parsed = _parse_ai_json(raw_result["raw"])
-                parsed["_provider"] = name
-                results.append(parsed)
-                logger.info("Provider OK: %s", name)
+            # Cap each provider (INCLUDING its one retry) so a slow/hung one can't blow
+            # the budget — it becomes a named timeout error and the rest still count.
+            parsed = await asyncio.wait_for(_attempt(name, func), timeout=_PROVIDER_TIMEOUT_S)
+            parsed["_provider"] = name
+            results.append(parsed)
+            logger.info("Provider OK: %s", name)
         except asyncio.TimeoutError:
             errors.append({"provider": name, "error": f"timed out after {_PROVIDER_TIMEOUT_S}s"})
             logger.warning("Provider TIMEOUT: %s (%ds)", name, _PROVIDER_TIMEOUT_S)

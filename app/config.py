@@ -42,13 +42,17 @@ class Settings:
 
     # ── AI Model Names (env-overridable; defaults are known-good) ──
     # To upgrade a model, set the matching env var in Render — no code change.
-    ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
-    OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o")
-    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-    GROK_MODEL: str = os.getenv("GROK_MODEL", "grok-4.3")
+    # `os.getenv(NAME, "").strip() or "<default>"` is deliberate: plain
+    # os.getenv(NAME, default) returns "" for a var that EXISTS but is BLANK, so a
+    # set-but-empty Render env var would send model="" and fail every call for that
+    # provider. The `or` makes UNSET, EMPTY, and whitespace all fall back to the default.
+    ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "").strip() or "claude-sonnet-4-6"
+    OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "").strip() or "gpt-4o"
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "").strip() or "gemini-2.5-flash"
+    GROK_MODEL: str = os.getenv("GROK_MODEL", "").strip() or "grok-4.3"
     # Grok model for image statements. Vision is built into xAI's current model
     # (grok-4.3), so there is no separate vision slug — same value as GROK_MODEL.
-    GROK_VISION_MODEL: str = os.getenv("GROK_VISION_MODEL", "grok-4.3")
+    GROK_VISION_MODEL: str = os.getenv("GROK_VISION_MODEL", "").strip() or "grok-4.3"
 
     # ── AI Generation Tuning (accuracy-first) ────────────────
     # 8192 is the fast-4-AI baseline. A high ceiling makes models generate huge output
