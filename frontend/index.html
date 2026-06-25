@@ -3300,6 +3300,11 @@ function buildAuditView() {
         '<div class="sh-sub">Auto-filled from upload · edit as needed</div></div>' +
         '<div class="fgrid-2">' +
           '<div class="field"><label>Business Name</label><input id="m-name" value="" placeholder="Merchant name"/></div>' +
+          '<div class="field"><label>ZIP Code</label><input id="m-zip" placeholder="80012"/></div>' +
+          '<div class="field"><label>Email</label><input id="m-email" type="email" placeholder="you@business.com"/></div>' +
+          '<div class="field"><label>Phone</label><input id="m-phone" type="tel" placeholder="(720) 555-1234"/></div>' +
+          '<div class="field"><label>Industry / Business Type</label><input id="m-industry" placeholder="Restaurant / QSR"/></div>' +
+          '<div class="field"><label>MCC Code</label><input id="m-mcc" placeholder="5812"/></div>' +
           '<div class="field"><label>Processor</label><select id="m-proc">' +
             '<option>Interchange +</option><option>Fiserv/FirstData</option><option>Stripe</option>' +
             '<option>Square</option><option>Clover</option><option>Heartland</option>' +
@@ -3498,24 +3503,79 @@ async function autoFillFromStatement() {
     var d = await resp.json();
     if (!d || typeof d !== 'object') return;
     _autofillSet('m-name', d.business_name);
+    _autofillSet('m-zip', d.zip);
+    _autofillSet('m-email', d.email);
+    _autofillSet('m-phone', d.phone);
+    _autofillSet('m-industry', d.industry);
+    _autofillSet('m-mcc', d.mcc_code);
     _autofillSet('m-proc', d.processor);
-    _autofillSet('m-stmt-date', d.statement_date);
+    _autofillSet('m-stmt-date', d.statement_date);     // _autofillSet detects the month box and converts
     _autofillSet('m-vol', d.monthly_volume);
     _autofillSet('m-fees', d.total_fees);
+    _autofillSet('m-ic', d.interchange_cost);
+    _autofillSet('m-markup', d.processor_markup);
+    _autofillSet('m-monthly', d.monthly_fees);
     _autofillSet('m-txn', d.transaction_count);
+    _autofillSet('m-cc-pct', d.credit_card_pct);
+    _autofillSet('m-ticket', d.avg_ticket);
   } catch (e) { /* fail-open: auto-fill is best-effort, never blocks Analyze */ }
 }
 
+function _toMonthInput(v) {
+  // Normalize an extracted statement date to the YYYY-MM that <input type="month"> needs.
+  if (!v) return null;
+  v = String(v).trim();
+  var m, mo = {jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12'};
+  if (/^\d{4}-\d{2}$/.test(v)) return v;                                            // already YYYY-MM
+  if ((m = v.match(/\b(\d{1,2})\/(\d{4})\b/))) return m[2] + '-' + ('0'+m[1]).slice(-2);  // MM/YYYY
+  var nm = v.match(/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i);           // month name anywhere
+  var yr = v.match(/(?:19|20)\d{2}/);                                               // 4-digit year anywhere
+  if (nm && yr) return yr[0] + '-' + mo[nm[1].slice(0,3).toLowerCase()];            // "February 2026", "Feb 1-28 2026"
+  if ((m = v.match(/\b(\d{1,2})[\/\-]\d{1,2}[\/\-](\d{2,4})\b/))) {                 // MM/DD/YYYY (range start)
+    var y = m[2].length === 2 ? '20'+m[2] : m[2];
+    return y + '-' + ('0'+m[1]).slice(-2);
+  }
+  return null;   // unrecognized -> leave blank (fail-open)
+}
+
+function _toNumber(v) {
+  // Strip $, commas, %, spaces etc. so an <input type="number"> actually accepts it.
+  if (typeof v === 'number') return isFinite(v) ? v : null;
+  if (v === null || v === undefined) return null;
+  var n = parseFloat(String(v).replace(/[^0-9.\-]/g, ''));
+  return isFinite(n) ? n : null;
+}
+
+// One reusable setter that adapts to the TARGET BOX's type so the extracted value
+// actually displays (select -> match/add option, month -> YYYY-MM, number -> bare
+// number, text -> as-is). Never overwrites what the user already entered.
 function _autofillSet(id, val) {
   if (val === null || val === undefined || val === '') return;
   var el = document.getElementById(id);
   if (!el) return;
-  if (el.value && String(el.value).trim() !== '') return;   // never overwrite what the user typed
-  el.value = val;
-  el.style.background = 'rgba(184,240,64,.07)';             // subtle lime tint = auto-filled
-  el.title = 'Auto-filled from your statement — editable';
-  var clear = function() { el.style.background = ''; el.title = ''; el.removeEventListener('input', clear); };
-  el.addEventListener('input', clear);
+  var tint = function() { el.style.background = 'rgba(184,240,64,.07)'; el.title = 'Auto-filled from your statement — editable'; };
+  var watch = function() {
+    var c = function(){ el.style.background=''; el.title=''; el.removeEventListener('input',c); el.removeEventListener('change',c); };
+    el.addEventListener('input', c); el.addEventListener('change', c);
+  };
+  if (el.tagName === 'SELECT') {
+    if (el.selectedIndex > 0) return;                       // user already picked a non-default option
+    var sv = String(val).trim(), match = null;
+    for (var i = 0; i < el.options.length; i++) {
+      var t = el.options[i].text.toLowerCase();
+      if (t === sv.toLowerCase() || t.indexOf(sv.toLowerCase()) !== -1 || sv.toLowerCase().indexOf(t) !== -1) { match = el.options[i]; break; }
+    }
+    if (!match) { match = new Option(sv, sv); el.add(match, 0); }   // not in the list -> add the real name + select it
+    el.value = match.value; tint(); watch(); return;
+  }
+  if (el.value && String(el.value).trim() !== '') return;   // never overwrite what the user already entered
+  if (el.type === 'month') {                                // <input type="month"> needs YYYY-MM
+    var mo = _toMonthInput(val); if (mo === null) return; el.value = mo; tint(); watch(); return;
+  }
+  if (el.type === 'number') {                               // <input type="number"> needs a bare number
+    var n = _toNumber(val); if (n === null) return; el.value = n; tint(); watch(); return;
+  }
+  el.value = val; tint(); watch();                          // text / other
 }
 
 function setRunBtn(enabled, label) {
@@ -4264,12 +4324,22 @@ function renderAuditResults(d) {
     ) +
     // ── PROVIDER FAILURES (named — not silently dropped) ───────
     ((d._errors && d._errors.length) ? (function() {
-      var rows = d._errors.map(function(e) {
-        return '<div style="font-family:var(--mono);font-size:9px;color:var(--warn);margin-top:3px">⚠ ' + esc(e.provider||'?') + ': ' + esc(e.error||'failed') + '</div>';
-      }).join('');
+      var isTimeout = function(e){ return /tim(e|ed)\s*out|timeout/i.test(String(e.error||'')); };
+      var allTimeout = d._errors.every(isTimeout);
       var total = (d._providerCount||0) + d._errors.length;
-      return '<div style="padding:8px 12px;background:rgba(224,144,32,.05);border:1px solid rgba(224,144,32,.25);border-radius:4px;margin-bottom:10px">' +
-        '<div style="font-family:var(--mono);font-size:9px;font-weight:700;color:var(--warn)">' + d._errors.length + ' of ' + total + ' AI providers did not return:</div>' +
+      var rows = d._errors.map(function(e) {
+        var prov = esc(e.provider||'?');
+        if (isTimeout(e)) return '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);margin-top:3px">⏳ ' + prov + ' — still processing, did not respond in time (not included)</div>';
+        return '<div style="font-family:var(--mono);font-size:9px;color:var(--warn);margin-top:3px">⚠ ' + prov + ' — ' + esc(e.error||'no response') + '</div>';
+      }).join('');
+      // All-timeout = a fast, good N-AI result, NOT a failure — show it neutrally.
+      var hdr = allTimeout
+        ? ('Verified by ' + (d._providerCount||0) + ' of ' + total + ' AIs · the rest did not respond in time:')
+        : (d._errors.length + ' of ' + total + ' AI providers did not return:');
+      var col = allTimeout ? 'var(--t2)' : 'var(--warn)';
+      var box = allTimeout ? 'rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.08)' : 'rgba(224,144,32,.05);border:1px solid rgba(224,144,32,.25)';
+      return '<div style="padding:8px 12px;background:' + box + ';border-radius:4px;margin-bottom:10px">' +
+        '<div style="font-family:var(--mono);font-size:9px;font-weight:700;color:' + col + '">' + hdr + '</div>' +
         rows +
       '</div>';
     })() : '') +
@@ -7210,7 +7280,13 @@ async function _extractViaBackend(){
   var h={}; if(typeof _jwt!=='undefined'&&_jwt) h['Authorization']='Bearer '+_jwt;
   if(typeof setProgress==='function') setProgress(55,'Running AI providers server-side...');
 
-  var resp=await fetch(API_BASE+'/api/audit/run',{method:'POST',headers:h,body:fd});
+  // Allow up to 120s for a worst-case ~90s multi-page 4-AI run (the backend caps
+  // itself near 80s). Without this, an indefinite fetch surfaces as "Failed to fetch".
+  var _ac=new AbortController(); var _to=setTimeout(function(){_ac.abort();},120000);
+  var resp;
+  try { resp=await fetch(API_BASE+'/api/audit/run',{method:'POST',headers:h,body:fd,signal:_ac.signal}); }
+  catch(e){ clearTimeout(_to); throw new Error(_ac.signal.aborted ? 'Analysis timed out — please try again.' : 'Could not reach the analysis server. '+(e&&e.message||'')); }
+  clearTimeout(_to);
   if(!resp.ok){ var eb={}; try{eb=await resp.json();}catch(e){} throw new Error('Audit failed: '+(eb.detail||('HTTP '+resp.status))); }
 
   var out=await resp.json(); var d=out.data||{};

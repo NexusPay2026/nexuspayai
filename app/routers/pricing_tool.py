@@ -604,7 +604,8 @@ async def public_extract_statement(req: PublicExtractRequest, db: AsyncSession =
 #  PUBLIC: QUICK IDENTITY EXTRACT — fast form auto-fill (no auth, no DB)
 # ═══════════════════════════════════════════════════════════════════
 _QUICK_FIELDS = ["business_name", "statement_date", "zip", "email", "phone",
-                 "monthly_volume", "total_fees", "transaction_count",
+                 "monthly_volume", "total_fees", "interchange_cost", "processor_markup",
+                 "monthly_fees", "transaction_count", "credit_card_pct", "avg_ticket",
                  "effective_rate", "industry", "mcc_code", "processor"]
 
 

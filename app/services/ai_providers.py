@@ -24,6 +24,8 @@ import json
 import base64
 import logging
 import asyncio
+import os
+import re
 from collections import Counter
 from typing import Optional, List, Dict, Any
 
@@ -51,6 +53,12 @@ _PROVIDER_TOKEN_CAP = {
 def _max_tokens(provider: str) -> int:
     """Clamp the global AI_MAX_TOKENS down to a provider's own ceiling."""
     return min(settings.AI_MAX_TOKENS, _PROVIDER_TOKEN_CAP.get(provider, 16000))
+
+
+# Per-provider wall-clock cap for the audit gather. The promise is ACCURATE results
+# within ~90s, NOT waiting for every provider — a slow/hung provider (e.g. Claude
+# ReadTimeout) becomes a named _error and the providers that returned are used.
+_PROVIDER_TIMEOUT_S = int(os.getenv("AI_PROVIDER_TIMEOUT", "78"))
 
 AI_EXTRACTION_PROMPT = """You are a forensic payment-processing audit TEAM with CPA-level numerical discipline. Treat this engagement like forensic accounting: every number you report must be traceable to the exact page and the exact printed text it came from.
 
@@ -138,24 +146,36 @@ Rules for line_items and findings:
 - Populate the provenance object for all six listed figures, each with its class, a page + verbatim quote (EXTRACTED) or basis formula (DERIVED), and a confidence."""
 
 
-QUICK_IDENTITY_PROMPT = """You are extracting ONLY the identity/header fields from a merchant processing statement, to auto-fill a form. Return ONLY a flat JSON object with these keys. Use null for any field not clearly printed on the statement - never guess, never estimate. No markdown, no preamble.
+QUICK_IDENTITY_PROMPT = """You are extracting the identity/header fields from a merchant processing statement, to auto-fill a form. Read the ENTIRE document, ALL pages, top to bottom - header, footer, address blocks, summary boxes, and fine print. Return ONLY a flat JSON object with these keys. No markdown, no preamble.
+
+SEARCH HARD for these - they are easy to miss:
+- statement_date: the statement period / cycle / closing date can appear ANYWHERE - a header, a footer, a 'Statement Period' line, near the account summary, or as a date range. Accept any format ('February 2026', '02/2026', 'Feb 1-28 2026', '2/1/26-2/28/26', a date range) and NORMALIZE to MM/YYYY (use the month the statement covers; for a range use its start month). Only null if there is genuinely no date anywhere.
+- processor: the processor / acquirer name may be in a logo area, the page header or footer, a remittance address, or a 'Questions about your statement? Call ...' line. Return the ACTUAL printed name (e.g. 'US EZPAY, INC.', 'Fiserv', 'Worldpay'). NEVER return a generic placeholder like 'Other', 'Unknown', or 'Processor'. Only null if no processor/acquirer identifier appears anywhere.
+- zip, email, phone: usually in the merchant address block, which can be on ANY page. Search the whole document.
+
+HARD RULE: use null ONLY when a field is genuinely absent after searching every page. Never guess, never estimate, never substitute a placeholder.
 
 {
   "business_name": "<merchant DBA / business name, or null>",
-  "statement_date": "<statement period as MM/YYYY, or null>",
+  "statement_date": "<statement period normalized to MM/YYYY, or null>",
   "zip": "<5-digit business ZIP, or null>",
   "email": "<contact email, or null>",
   "phone": "<contact phone, or null>",
   "monthly_volume": <total monthly processing volume as a number, or null>,
   "total_fees": <total fees charged as a number, or null>,
+  "interchange_cost": <interchange cost / interchange & dues+assessments as a number, or null>,
+  "processor_markup": <processor markup / profit above interchange as a number, or null>,
+  "monthly_fees": <fixed monthly / recurring fees as a number, or null>,
   "transaction_count": <transaction count as an integer, or null>,
+  "credit_card_pct": <credit card percent of total volume as a number 0-100, or null>,
+  "avg_ticket": <average ticket size as a number, or null>,
   "effective_rate": <total_fees / monthly_volume * 100 as a number if both present, else null>,
   "industry": "<merchant industry / business type, or null>",
   "mcc_code": "<4-digit MCC if shown, or null>",
-  "processor": "<processor / acquirer name, or null>"
+  "processor": "<actual processor / acquirer name as printed, or null>"
 }
 
-Start with { and end with }. Null for anything not clearly on the statement."""
+Start with { and end with }. Null ONLY when genuinely absent on every page."""
 
 
 # ────────────────────────────────────────────────────────────
@@ -565,31 +585,84 @@ async def _call_grok(file_b64: str, media_type: str, pdf_text: str,
     return {"provider": "Grok", "raw": text}
 
 
+def _balance_json(s: str) -> str:
+    """Best-effort repair of a truncated JSON object: drop a dangling trailing comma
+    and append the brackets/braces still open (innermost first)."""
+    stack = []
+    in_str = False
+    escape = False
+    for ch in s:
+        if escape:
+            escape = False; continue
+        if ch == "\\":
+            escape = True; continue
+        if ch == '"':
+            in_str = not in_str; continue
+        if in_str:
+            continue
+        if ch in "{[":
+            stack.append(ch)
+        elif ch == "}" and stack and stack[-1] == "{":
+            stack.pop()
+        elif ch == "]" and stack and stack[-1] == "[":
+            stack.pop()
+    s2 = s.rstrip()
+    if s2.endswith(","):
+        s2 = s2[:-1]
+    return s2 + "".join("}" if c == "{" else "]" for c in reversed(stack))
+
+
 def _parse_ai_json(raw_text: str) -> Dict:
-    """Extract JSON from AI response, handling markdown fences and preamble."""
+    """Extract JSON from an AI response. HARDENED so one malformed field never loses
+    the whole extraction (foundational for provenance — verbatim quotes legitimately
+    contain quote chars): strips fences/preamble, escapes raw newlines AND stray
+    double-quotes inside string values, then falls back through trailing-comma
+    removal and brace-balancing for truncated output."""
     text = raw_text.strip()
     text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     start = text.find("{")
-    end = text.rfind("}")
-    if start == -1 or end == -1:
+    if start == -1:
         raise ValueError("No JSON object found in response (possibly truncated).")
-    json_str = text[start:end + 1]
-    sanitized = []
+    end = text.rfind("}")
+    json_str = text[start:(end + 1) if end != -1 else len(text)]
+
+    out = []
     in_str = False
     escape = False
-    for ch in json_str:
+    n = len(json_str)
+    for i, ch in enumerate(json_str):
         if escape:
-            sanitized.append(ch); escape = False; continue
+            out.append(ch); escape = False; continue
         if ch == "\\":
-            sanitized.append(ch); escape = True; continue
+            out.append(ch); escape = True; continue
         if ch == '"':
-            in_str = not in_str; sanitized.append(ch); continue
+            if not in_str:
+                in_str = True; out.append(ch); continue
+            # Inside a string: is this the CLOSING quote, or a stray quote in the value?
+            # A real close is followed (after optional whitespace) by , } ] : or EOF.
+            j = i + 1
+            while j < n and json_str[j] in " \t\r\n":
+                j += 1
+            if j >= n or json_str[j] in ",}]:":
+                in_str = False; out.append(ch)            # genuine close
+            else:
+                out.append('\\"')                          # stray quote inside value -> escape
+            continue
         if in_str and ch == "\n":
-            sanitized.append("\\n"); continue
+            out.append("\\n"); continue
         if in_str and ch == "\r":
-            sanitized.append("\\r"); continue
-        sanitized.append(ch)
-    return json.loads("".join(sanitized))
+            out.append("\\r"); continue
+        out.append(ch)
+    sanitized = "".join(out)
+
+    for cand in (sanitized,
+                 re.sub(r",(\s*[}\]])", r"\1", sanitized),   # drop trailing commas
+                 _balance_json(sanitized)):                  # close truncated structures
+        try:
+            return json.loads(cand)
+        except Exception:
+            continue
+    raise ValueError("Could not parse AI JSON after hardening (malformed or truncated).")
 
 
 def provider_status() -> Dict[str, bool]:
@@ -659,17 +732,24 @@ async def run_audit_all_providers(file_b64: str, media_type: str,
 
     async def _run(name, func):
         try:
-            raw_result = await func(file_b64, media_type, pdf_text, units)
+            # Cap each provider so one slow/hung one can't blow the ~90s budget —
+            # it becomes a named timeout error and the rest still count.
+            raw_result = await asyncio.wait_for(
+                func(file_b64, media_type, pdf_text, units), timeout=_PROVIDER_TIMEOUT_S)
             if raw_result:
                 parsed = _parse_ai_json(raw_result["raw"])
                 parsed["_provider"] = name
                 results.append(parsed)
                 logger.info("Provider OK: %s", name)
+        except asyncio.TimeoutError:
+            errors.append({"provider": name, "error": f"timed out after {_PROVIDER_TIMEOUT_S}s"})
+            logger.warning("Provider TIMEOUT: %s (%ds)", name, _PROVIDER_TIMEOUT_S)
         except Exception as e:
             errors.append({"provider": name, "error": str(e) or type(e).__name__})
             logger.warning("Provider FAILED: %s — %s", name, e)
 
-    await asyncio.gather(*[_run(name, func) for name, func in providers])
+    # return_exceptions=True so a stray failure inside a _run can never abort the whole batch.
+    await asyncio.gather(*[_run(name, func) for name, func in providers], return_exceptions=True)
 
     # Always log the full run summary so partial failures are visible in Render logs.
     logger.info("Audit run: attempted=%d succeeded=%d failed=%d errors=%s",
