@@ -10,13 +10,77 @@ Surfaces served:
 """
 
 import os
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.config import settings
 from app.database import engine, Base, database
 from app.routers import auth, merchants, users, visitors, audit, health, storage, quotes, pricing_tool, chatbot, statements, exclusions
+
+logger = logging.getLogger("nexuspay.api")
+
+
+class CorsSafe500Middleware:
+    """Turn an unhandled exception into a JSON 500 that still carries CORS headers.
+
+    Starlette's ServerErrorMiddleware wraps *everything* (it sits OUTSIDE the user
+    middleware, including CORSMiddleware) and emits its 500 on the raw ASGI send. So an
+    unhandled exception in a route returns a 500 with NO Access-Control-Allow-Origin
+    header, and the browser reports a misleading "No 'Access-Control-Allow-Origin'
+    header is present" CORS error that masks the real exception and status code.
+
+    This middleware is added BEFORE CORSMiddleware (add_middleware inserts at index 0,
+    so the LAST-added middleware is outermost -- see Starlette build_middleware_stack).
+    CORSMiddleware therefore WRAPS this one: the JSON 500 returned here flows back OUT
+    through CORS and gets the Access-Control-Allow-Origin header. HTTPExceptions are
+    handled deeper by ExceptionMiddleware and never reach here. The response_started
+    guard mirrors ServerErrorMiddleware so a mid-stream crash bubbles up instead of
+    trying to send a second response.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        response_started = False
+
+        async def _send(message: Message) -> None:
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, _send)
+        except Exception as exc:
+            logger.exception(
+                "Unhandled error on %s %s", scope.get("method"), scope.get("path")
+            )
+            if response_started:
+                # Response is already on the wire; can't replace it. Let it bubble to
+                # ServerErrorMiddleware (which handles the response_started case too).
+                raise
+            response = JSONResponse(
+                status_code=500,
+                content={
+                    "error": "internal_server_error",
+                    "type": type(exc).__name__,
+                    "detail": str(exc),
+                    "path": scope.get("path"),
+                    "method": scope.get("method"),
+                },
+            )
+            # `send` here is CORSMiddleware's wrapped send (CORS is outside us), so this
+            # response gets Access-Control-Allow-Origin on its way out.
+            await response(scope, receive, send)
 
 # â”€â”€ Lifespan â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 @asynccontextmanager
@@ -75,6 +139,16 @@ ALLOW_CREDENTIALS = True
 if settings.APP_ENV == "development":
     ALLOWED_ORIGINS = ["*"]
     ALLOW_CREDENTIALS = False
+
+# Unhandled-error CORS safety net. MUST be added BEFORE CORSMiddleware so CORS wraps it
+# (add_middleware makes the LAST-added middleware outermost). This lets 500s carry CORS
+# headers, so a failing POST shows the real error/status in the browser instead of a
+# masked "No Access-Control-Allow-Origin" CORS error. Verified against Starlette 0.52.1.
+# ORDERING IS LOAD-BEARING: keep this the FIRST add_middleware call (innermost user
+# middleware, directly inside CORS). Any NEW middleware must be added BEFORE this line so
+# it stays inside the catch; a middleware added after it would sit outside and its 500s
+# would lose CORS headers again.
+app.add_middleware(CorsSafe500Middleware)
 
 app.add_middleware(
     CORSMiddleware,

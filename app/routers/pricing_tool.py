@@ -626,4 +626,14 @@ async def quick_extract(req: PublicExtractRequest):
     data = await quick_identity_extract(req.file_base64 or "", media_type, pages=pages or None)
     if not isinstance(data, dict):
         data = {}
+    # avg_ticket is ALWAYS derivable from volume / txn count — never leave it blank
+    # when both are present, even if the statement doesn't print it.
+    if not data.get("avg_ticket"):
+        try:
+            _v = float(data.get("monthly_volume") or 0)
+            _t = float(data.get("transaction_count") or 0)
+            if _v > 0 and _t > 0:
+                data["avg_ticket"] = round(_v / _t, 2)
+        except (TypeError, ValueError):
+            pass
     return {k: data.get(k) for k in _QUICK_FIELDS}

@@ -65,4 +65,21 @@ async def health():
             "google": bool(settings.GOOGLE_API_KEY),
             "grok": bool(settings.GROK_API_KEY),
         },
+        # Running AI tuning — reflects the LIVE values (Render env overrides included),
+        # so we can confirm what the process actually sees instead of guessing. app_env
+        # also reveals the CORS mode (development => allow_origins=["*"]).
+        "ai_config": {
+            "app_env": settings.APP_ENV,
+            "ai_max_tokens": settings.AI_MAX_TOKENS,
+            "ai_timeout_s": settings.AI_TIMEOUT,
+            "ai_provider_timeout_s": int(os.getenv("AI_PROVIDER_TIMEOUT", "78")),
+            "ai_temperature": settings.AI_TEMPERATURE,
+            "models": {
+                "anthropic": settings.ANTHROPIC_MODEL,
+                "openai": settings.OPENAI_MODEL,
+                "gemini": settings.GEMINI_MODEL,
+                "grok": settings.GROK_MODEL,
+                "grok_vision": settings.GROK_VISION_MODEL,
+            },
+        },
     }

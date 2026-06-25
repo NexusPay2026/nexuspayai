@@ -51,8 +51,11 @@ class Settings:
     GROK_VISION_MODEL: str = os.getenv("GROK_VISION_MODEL", "grok-4.3")
 
     # ── AI Generation Tuning (accuracy-first) ────────────────
-    # max_tokens raised so multi-page line-item JSON is never truncated.
-    AI_MAX_TOKENS: int = int(os.getenv("AI_MAX_TOKENS", "16000"))
+    # 8192 is the fast-4-AI baseline. A high ceiling makes models generate huge output
+    # and blow the ~90s budget (Claude/Gemini timed out at 24000). Per-provider caps
+    # clamp this further, and any truncation is recovered by _parse_ai_json's brace-
+    # balancing + the prompt's verbatim cap — so a large ceiling is not needed.
+    AI_MAX_TOKENS: int = int(os.getenv("AI_MAX_TOKENS", "8192"))
     # temperature 0 = deterministic arithmetic; best for accounting/math reliability.
     AI_TEMPERATURE: float = float(os.getenv("AI_TEMPERATURE", "0"))
     # per-call HTTP timeout in seconds (Render cold starts + large PDFs)
