@@ -18,7 +18,7 @@ from app.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Visitor, Merchant
 from app.services.r2_storage import r2_available, generate_r2_key, upload_to_r2
-from app.services.ai_providers import run_audit_all_providers
+from app.services.ai_providers import run_audit_all_providers, quick_identity_extract
 
 router = APIRouter(prefix="/api/pricing-tool", tags=["pricing-tool"])
 
@@ -598,3 +598,31 @@ async def public_extract_statement(req: PublicExtractRequest, db: AsyncSession =
         "_merchant_id": merchant_id_for_signup,
         **({"_pageCount": result["_pageCount"]} if "_pageCount" in result else {}),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  PUBLIC: QUICK IDENTITY EXTRACT — fast form auto-fill (no auth, no DB)
+# ═══════════════════════════════════════════════════════════════════
+_QUICK_FIELDS = ["business_name", "statement_date", "zip", "email", "phone",
+                 "monthly_volume", "total_fees", "transaction_count",
+                 "effective_rate", "industry", "mcc_code", "processor"]
+
+
+@router.post("/quick-extract")
+async def quick_extract(req: PublicExtractRequest):
+    """Public, no-auth, NO DB writes: a fast single-Claude identity extraction so a
+    frontend can auto-fill form fields the moment a statement is uploaded (before
+    Analyze). FAIL-OPEN — always returns 200 with the flat field set, nulls for
+    anything not found. Reuses the shared multi-page normalization layer."""
+    _enforce_upload_size(req.files, req.file_base64)   # 413 only if oversized
+    media_type = req.resolved_media_type()
+    pages = []
+    for f in (req.files or []):
+        f = f or {}
+        b64 = f.get("base64") or f.get("data")
+        if b64:
+            pages.append({"base64": b64, "media_type": f.get("type") or f.get("media_type") or media_type})
+    data = await quick_identity_extract(req.file_base64 or "", media_type, pages=pages or None)
+    if not isinstance(data, dict):
+        data = {}
+    return {k: data.get(k) for k in _QUICK_FIELDS}

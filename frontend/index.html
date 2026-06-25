@@ -3442,6 +3442,7 @@ function onFileSelect(e) {
       _fileText = ev.target.result;
       _fileBase64 = 'TEXT';
       _fileReady = true;
+      autoFillFromStatement();
       renderFilePills();
       setRunBtn(true, '▶ Run Forensic Audit');
       toast('Text loaded: ' + f.name, 'ok');
@@ -3453,6 +3454,7 @@ function onFileSelect(e) {
     br.onload = function(ev) {
       _fileBase64 = ev.target.result.split(',')[1];
       _fileReady = true;
+      autoFillFromStatement();
       renderFilePills();
       setRunBtn(true, '▶ Run Forensic Audit');
       toast(isPDF ? 'PDF ready — click Run Audit' : 'Image ready — click Run Audit', 'ok');
@@ -3466,6 +3468,7 @@ function onFileSelect(e) {
       _fileBase64 = ev.target.result.split(',')[1];
       _fileType = 'application/pdf';
       _fileReady = true;
+      autoFillFromStatement();
       renderFilePills();
       setRunBtn(true, '▶ Run Forensic Audit');
       toast('File loaded: ' + f.name, 'ok');
@@ -3473,6 +3476,46 @@ function onFileSelect(e) {
     ur.onerror = function() { setRunBtn(true, '▶ Run Forensic Audit'); toast('Could not read file', 'err'); };
     ur.readAsDataURL(f);
   }
+}
+
+// ── AUTO-FILL: on upload, populate identity fields from the statement (before Analyze) ──
+// Fires a lightweight server-side identity extraction (/api/pricing-tool/quick-extract,
+// a single Claude call) and fills ONLY empty fields. Fail-open: never blocks the upload.
+async function autoFillFromStatement() {
+  try {
+    if (!_fileReady) return;
+    var body;
+    if (_fileBase64 === 'TEXT' && _fileText) {
+      body = { file_base64: btoa(unescape(encodeURIComponent(_fileText))), media_type: 'text/plain' };
+    } else if (_fileBase64) {
+      body = { file_base64: _fileBase64, media_type: _fileType || 'application/pdf' };
+    } else { return; }
+    var h = { 'Content-Type': 'application/json' };
+    if (typeof _jwt !== 'undefined' && _jwt) h['Authorization'] = 'Bearer ' + _jwt;
+    var resp = await fetch(API_BASE + '/api/pricing-tool/quick-extract',
+                          { method: 'POST', headers: h, body: JSON.stringify(body) });
+    if (!resp.ok) return;                       // fail-open
+    var d = await resp.json();
+    if (!d || typeof d !== 'object') return;
+    _autofillSet('m-name', d.business_name);
+    _autofillSet('m-proc', d.processor);
+    _autofillSet('m-stmt-date', d.statement_date);
+    _autofillSet('m-vol', d.monthly_volume);
+    _autofillSet('m-fees', d.total_fees);
+    _autofillSet('m-txn', d.transaction_count);
+  } catch (e) { /* fail-open: auto-fill is best-effort, never blocks Analyze */ }
+}
+
+function _autofillSet(id, val) {
+  if (val === null || val === undefined || val === '') return;
+  var el = document.getElementById(id);
+  if (!el) return;
+  if (el.value && String(el.value).trim() !== '') return;   // never overwrite what the user typed
+  el.value = val;
+  el.style.background = 'rgba(184,240,64,.07)';             // subtle lime tint = auto-filled
+  el.title = 'Auto-filled from your statement — editable';
+  var clear = function() { el.style.background = ''; el.title = ''; el.removeEventListener('input', clear); };
+  el.addEventListener('input', clear);
 }
 
 function setRunBtn(enabled, label) {

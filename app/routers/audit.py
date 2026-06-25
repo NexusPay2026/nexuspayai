@@ -18,7 +18,8 @@ from app.database import get_db
 from app.models import AuditJob, Merchant, User
 from app.schemas import AuditStatusResponse
 from app.services.auth_service import get_current_user
-from app.services.ai_providers import run_audit_all_providers
+from app.config import settings
+from app.services.ai_providers import run_audit_all_providers, ENGINE_VERSION
 from app.services.r2_storage import r2_available, upload_to_r2, generate_r2_key
 from app.services import audit_log
 
@@ -85,6 +86,21 @@ def _client_meta(request: Request):
 
 
 _CONSENSUS_CHECK_FIELDS = ("monthly_volume", "total_fees", "effective_rate")
+
+
+def _cache_is_fresh(cached: dict) -> bool:
+    """A cached audit is reusable only if it came from the CURRENT engine version
+    AND was a clean full run (no provider errors, every configured provider
+    returned). Otherwise it is re-extracted, so stale/broken results are never
+    served as if good."""
+    if not isinstance(cached, dict):
+        return False
+    if cached.get("_engine_version") != ENGINE_VERSION:
+        return False
+    if cached.get("_errors"):
+        return False
+    configured = sum(1 for ok in settings.ai_provider_status.values() if ok)
+    return int(cached.get("_providerCount") or 0) >= max(1, configured)
 
 
 def _build_provider_results(result: dict) -> List[dict]:
@@ -190,7 +206,7 @@ async def run_audit(
         .order_by(AuditJob.created_at.desc())
     )
     prior_job = prior.scalars().first()
-    if prior_job and prior_job.consensus_data:
+    if prior_job and prior_job.consensus_data and _cache_is_fresh(prior_job.consensus_data):
         await audit_log.record(
             db, action="dedup_hit", actor=user, entity_type="statement",
             entity_id=prior_job.merchant_id, file_hash=combined,
@@ -215,17 +231,29 @@ async def run_audit(
             "data": prior_job.consensus_data,
         }
 
-    # 4) Open the job
-    job = AuditJob(
-        user_id=user["sub"], status="processing",
-        file_hash=combined, page_count=page_count,
-    )
-    db.add(job)
+    # Stale / broken / old-engine cache (or none): re-extract below. If a prior job
+    # exists for these exact bytes, REUSE it in place so re-extraction never creates
+    # a duplicate record.
+    reuse_job = prior_job if (prior_job and prior_job.consensus_data) else None
+    reuse_merchant_id = reuse_job.merchant_id if reuse_job is not None else None
+
+    # 4) Open (or reuse) the job
+    if reuse_job is not None:
+        job = reuse_job
+        job.status = "processing"
+        job.page_count = page_count
+    else:
+        job = AuditJob(
+            user_id=user["sub"], status="processing",
+            file_hash=combined, page_count=page_count,
+        )
+        db.add(job)
     await db.commit()
     await db.refresh(job)
 
     # 5) Cold-store EVERY file in R2 (compliance / chain of custody)
     files_meta = []
+    pages = []                  # every page -> the multi-page engine (all providers)
     primary_b64 = None
     primary_media = None
     for rec in file_records:
@@ -238,6 +266,8 @@ async def run_audit(
             "content_type": rec["content_type"], "sha256": rec["sha256"],
             "r2_key": r2_key,
         })
+        pages.append({"base64": base64.b64encode(rec["bytes"]).decode("utf-8"),
+                      "media_type": rec["content_type"]})
         if rec["page"] == 1:
             if rec["content_type"] in ("text/csv", "text/plain"):
                 primary_b64 = rec["bytes"].decode("utf-8", errors="replace")
@@ -258,24 +288,14 @@ async def run_audit(
 
     try:
         # 6) Analyze. Single file / multi-page PDF = full analysis.
-        result = await run_audit_all_providers(primary_b64, primary_media)
+        result = await run_audit_all_providers(primary_b64, primary_media, pages=pages)
 
         # Tier 1d: auto-derive statement_date from extracted statement_month if blank
         if not statement_date:
             statement_date = _normalize_month(result.get("statement_month", ""))
 
-        # Multi-PHOTO statements: stored+grouped, but flag analysis for review
-        # (true multi-image vision consensus is Tier 1b).
-        multi_photo = page_count > 1 and primary_media and primary_media.startswith("image/")
-        if multi_photo:
-            findings = result.get("findings", []) or []
-            findings.append(
-                f"NEEDS REVIEW - multi-file statement: {page_count} files stored and "
-                f"hashed, automated analysis covered file 1 of {page_count}. "
-                f"Full multi-page analysis pending (Tier 1b)."
-            )
-            result["findings"] = findings
-            result["_needs_review"] = True
+        # Multi-page (PDF / photos) is now fully analyzed by the engine via pages=,
+        # so the old "file 1 only" NEEDS-REVIEW downgrade is gone.
 
         # Form values are a fallback only - AI-extracted values win when present
         form_name = (business_name or merchant_name or "").strip()
@@ -312,7 +332,7 @@ async def run_audit(
         # result instead of persisting a duplicate merchant.
         # NOTE: runs after extraction because merchant_number / monthly_volume /
         # total_fees only exist once the providers have read the statement.
-        if mn and statement_date and u:
+        if reuse_job is None and mn and statement_date and u:
             ent_q = await db.execute(
                 select(Merchant).where(
                     Merchant.merchant_number == mn,
@@ -353,6 +373,10 @@ async def run_audit(
                     "findings": entity.findings,
                 }
 
+                if not _cache_is_fresh(cached):
+                    reuse_merchant_id = entity.id   # stale entity cache -> refresh in place
+                    break
+
                 job.merchant_id = entity.id
                 job.status = "complete"
                 job.consensus_data = cached
@@ -391,7 +415,7 @@ async def run_audit(
         # 7) REVISION CHECK - same MID + statement_date, different bytes => flag + keep
         revision_group = None
         is_revision = False
-        if mn:
+        if reuse_merchant_id is None and mn:
             rev_q = await db.execute(
                 select(Merchant).where(
                     Merchant.owner_email == user.get("email", ""),
@@ -411,8 +435,9 @@ async def run_audit(
                             "original_id": existing.id},
                 )
 
-        # 8) Persist merchant with all Tier 1 fields
-        merchant = Merchant(
+        # 8) Persist merchant with all Tier 1 fields. If we are refreshing a stale
+        #    prior record for the same statement, UPDATE it in place (no duplicate).
+        merchant_values = dict(
             name=result.get("name") or form_name or "Unknown",
             processor=result.get("processor") or form_processor or "",
             statement_month=result.get("statement_month", ""),
@@ -447,9 +472,19 @@ async def run_audit(
             uploaded_via=uploaded_via,
             consent_at=(datetime.now(timezone.utc) if consent else None),
         )
+        existing_merchant = None
+        if reuse_merchant_id:
+            _em = await db.execute(select(Merchant).where(Merchant.id == reuse_merchant_id))
+            existing_merchant = _em.scalar_one_or_none()
+        if existing_merchant is not None:
+            merchant = existing_merchant
+            for _k, _v in merchant_values.items():
+                setattr(merchant, _k, _v)
+        else:
+            merchant = Merchant(**merchant_values)
+            db.add(merchant)
         if u:
             merchant.owner_id = u.id
-        db.add(merchant)
 
         job.merchant_id = merchant.id
         job.status = "complete"

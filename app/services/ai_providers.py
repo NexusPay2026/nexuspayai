@@ -33,6 +33,25 @@ from app.config import settings
 
 logger = logging.getLogger("nexuspay.ai")
 
+# Engine version — bump on any model/prompt/pipeline change to auto-invalidate
+# cached audit results (the portal cache is quality-gated AND version-gated).
+ENGINE_VERSION = "2026-06-24"
+
+# Per-provider completion-token ceilings. AI_MAX_TOKENS is the desired budget;
+# each provider clamps to its OWN hard limit so one global number can never 400 a
+# provider again. This lives in CODE, not env, by design.
+_PROVIDER_TOKEN_CAP = {
+    "openai": 16000,     # GPT-4o hard limit is 16384
+    "anthropic": 64000,  # claude-sonnet-4-6
+    "gemini": 64000,     # gemini-2.5-flash
+    "grok": 131072,      # grok-4.3: 1M context, no low completion cap
+}
+
+
+def _max_tokens(provider: str) -> int:
+    """Clamp the global AI_MAX_TOKENS down to a provider's own ceiling."""
+    return min(settings.AI_MAX_TOKENS, _PROVIDER_TOKEN_CAP.get(provider, 16000))
+
 AI_EXTRACTION_PROMPT = """You are a forensic payment-processing audit TEAM with CPA-level numerical discipline. Treat this engagement like forensic accounting: every number you report must be traceable to the exact page and the exact printed text it came from.
 
 PROCESS - do this in order, do not skip:
@@ -117,6 +136,26 @@ Rules for line_items and findings:
 - "benchmark" is an external market reference, not a value from this statement. Set it to null unless you are citing a real, known industry benchmark, and never let a benchmark masquerade as an extracted figure.
 - For findings, flag every fee above benchmark, every negotiable charge, and every downgrade opportunity, citing the exact EXTRACTED dollar amount and the page it came from.
 - Populate the provenance object for all six listed figures, each with its class, a page + verbatim quote (EXTRACTED) or basis formula (DERIVED), and a confidence."""
+
+
+QUICK_IDENTITY_PROMPT = """You are extracting ONLY the identity/header fields from a merchant processing statement, to auto-fill a form. Return ONLY a flat JSON object with these keys. Use null for any field not clearly printed on the statement - never guess, never estimate. No markdown, no preamble.
+
+{
+  "business_name": "<merchant DBA / business name, or null>",
+  "statement_date": "<statement period as MM/YYYY, or null>",
+  "zip": "<5-digit business ZIP, or null>",
+  "email": "<contact email, or null>",
+  "phone": "<contact phone, or null>",
+  "monthly_volume": <total monthly processing volume as a number, or null>,
+  "total_fees": <total fees charged as a number, or null>,
+  "transaction_count": <transaction count as an integer, or null>,
+  "effective_rate": <total_fees / monthly_volume * 100 as a number if both present, else null>,
+  "industry": "<merchant industry / business type, or null>",
+  "mcc_code": "<4-digit MCC if shown, or null>",
+  "processor": "<processor / acquirer name, or null>"
+}
+
+Start with { and end with }. Null for anything not clearly on the statement."""
 
 
 # ────────────────────────────────────────────────────────────
@@ -282,7 +321,7 @@ def _units_have_images(units: List[Dict[str, Any]]) -> bool:
 
 
 # Provider-specific builders: label + block per page, then the extraction prompt last.
-def _anthropic_content(units: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _anthropic_content(units: List[Dict[str, Any]], prompt: str = AI_EXTRACTION_PROMPT) -> List[Dict[str, Any]]:
     content: List[Dict[str, Any]] = []
     for u in units:
         content.append({"type": "text", "text": u["label"] + ":"})
@@ -291,7 +330,7 @@ def _anthropic_content(units: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                             "media_type": u["media_type"], "data": u["b64"]}})
         else:
             content.append({"type": "text", "text": u["text"]})
-    content.append({"type": "text", "text": AI_EXTRACTION_PROMPT})
+    content.append({"type": "text", "text": prompt})
     return content
 
 
@@ -362,7 +401,7 @@ async def _call_anthropic(file_b64: str, media_type: str, pdf_text: str,
             headers=headers,
             json={
                 "model": settings.ANTHROPIC_MODEL,
-                "max_tokens": settings.AI_MAX_TOKENS,
+                "max_tokens": _max_tokens("anthropic"),
                 "temperature": settings.AI_TEMPERATURE,
                 "messages": [{"role": "user", "content": content}],
             },
@@ -404,7 +443,7 @@ async def _call_openai(file_b64: str, media_type: str, pdf_text: str,
             headers={"Authorization": f"Bearer {settings.OPENAI_API_KEY}", "Content-Type": "application/json"},
             json={
                 "model": settings.OPENAI_MODEL,
-                "max_tokens": settings.AI_MAX_TOKENS,
+                "max_tokens": _max_tokens("openai"),   # GPT-4o hard ceiling is 16384
                 "temperature": settings.AI_TEMPERATURE,
                 "response_format": {"type": "json_object"},
                 "messages": [{"role": "user", "content": msg_content}],
@@ -444,7 +483,7 @@ async def _call_gemini(file_b64: str, media_type: str, pdf_text: str,
                 "contents": [{"parts": parts}],
                 "generationConfig": {
                     "temperature": settings.AI_TEMPERATURE,
-                    "maxOutputTokens": settings.AI_MAX_TOKENS,
+                    "maxOutputTokens": _max_tokens("gemini"),
                     "responseMimeType": "application/json",   # force syntactically valid JSON
                 },
             },
@@ -460,8 +499,11 @@ async def _call_gemini(file_b64: str, media_type: str, pdf_text: str,
     # normal completion, instead of surfacing a confusing downstream parse error.
     if finish and finish not in ("STOP", "MAX_TOKENS"):
         raise Exception(f"Gemini returned no usable content (finishReason={finish})")
+    if not text.strip():
+        block = (data.get("promptFeedback") or {}).get("blockReason")
+        raise Exception(f"Gemini empty response (finishReason={finish}, blockReason={block})")
     if finish == "MAX_TOKENS":
-        logger.warning("Gemini hit MAX_TOKENS (%d) — output truncated", settings.AI_MAX_TOKENS)
+        logger.warning("Gemini hit MAX_TOKENS (%d) — output truncated", _max_tokens("gemini"))
     logger.info("Gemini OK: finishReason=%s, %d chars", finish, len(text))
     return {"provider": "Gemini", "raw": text}
 
@@ -509,7 +551,7 @@ async def _call_grok(file_b64: str, media_type: str, pdf_text: str,
             headers={"Authorization": f"Bearer {settings.GROK_API_KEY}", "Content-Type": "application/json"},
             json={
                 "model": model,
-                "max_tokens": settings.AI_MAX_TOKENS,
+                "max_tokens": _max_tokens("grok"),
                 "temperature": settings.AI_TEMPERATURE,
                 "response_format": {"type": "json_object"},   # force syntactically valid JSON (xAI is OpenAI-compatible)
                 "messages": [{"role": "user", "content": msg_content}],
@@ -624,7 +666,7 @@ async def run_audit_all_providers(file_b64: str, media_type: str,
                 results.append(parsed)
                 logger.info("Provider OK: %s", name)
         except Exception as e:
-            errors.append({"provider": name, "error": str(e)})
+            errors.append({"provider": name, "error": str(e) or type(e).__name__})
             logger.warning("Provider FAILED: %s — %s", name, e)
 
     await asyncio.gather(*[_run(name, func) for name, func in providers])
@@ -644,12 +686,55 @@ async def run_audit_all_providers(file_b64: str, media_type: str,
         r["_confidence"] = "single"
         r["_errors"] = errors           # <-- now surfaced, not swallowed
         r["_provider_results"] = [_provider_summary(r)]
+        r["_engine_version"] = ENGINE_VERSION
         return r
 
     consensus = _build_consensus(results)
     consensus["_errors"] = errors       # <-- surfaced even on a successful multi-run
     consensus["_provider_results"] = [_provider_summary(r) for r in results]
+    consensus["_engine_version"] = ENGINE_VERSION
     return consensus
+
+
+async def quick_identity_extract(file_b64: str, media_type: str,
+                                 pages: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+    """Fast single-Claude identity extraction for FORM AUTO-FILL (not the forensic
+    pass). Reuses _normalize_pages so it works for PDF / scan / photo / screenshot
+    without duplicating that layer. Returns flat identity fields (nulls for
+    not-found). FAIL-OPEN: returns {} on any error/timeout so an upload is never
+    blocked. All model logic stays server-side."""
+    if not settings.ANTHROPIC_API_KEY:
+        return {}
+    try:
+        page_list = pages or ([{"base64": file_b64, "media_type": media_type}] if file_b64 else [])
+        units = _normalize_pages(page_list)
+        if not units:
+            return {}
+        content = _anthropic_content(units, QUICK_IDENTITY_PROMPT)
+        async with httpx.AsyncClient(timeout=_http_timeout()) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": settings.ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": settings.ANTHROPIC_MODEL,
+                    "max_tokens": 1024,
+                    "temperature": settings.AI_TEMPERATURE,
+                    "messages": [{"role": "user", "content": content}],
+                },
+            )
+        if resp.status_code != 200:
+            logger.warning("quick_identity_extract: Claude %s: %s", resp.status_code, resp.text[:200])
+            return {}
+        data = resp.json()
+        text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+        return _parse_ai_json(text)
+    except Exception as e:
+        logger.warning("quick_identity_extract failed: %s", e)
+        return {}
 
 
 def _build_consensus(results: List[Dict]) -> Dict:
