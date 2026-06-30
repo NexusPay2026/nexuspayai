@@ -153,6 +153,11 @@ async def _run_shared_extraction(file_base64: str, media_type: str, files: list 
     adapted = dict(result)
     adapted["business_name"] = adapted.pop("name", None) or None
     adapted["current_processor"] = adapted.pop("processor", None) or None
+    # Preserve the STRUCTURED findings (severity / savings / page / verbatim) under a
+    # NEW additive key; the flattened string list below stays UNCHANGED so existing
+    # consumers (e.g. the /extract portal path, which reads only `findings`) are
+    # untouched. Pass-through of the consensus findings — no recomputation.
+    adapted["findings_detailed"] = result.get("findings") or []
     adapted["findings"] = [
         (f.get("text", "") if isinstance(f, dict) else str(f))
         for f in (result.get("findings") or [])
@@ -581,6 +586,14 @@ async def public_extract_statement(req: PublicExtractRequest, db: AsyncSession =
         "total_fees": result.get("total_fees"),
         "industry": result.get("industry"),
         "findings": findings_list,
+        # ── Additive pass-through for the richer paycalculator overview. Every value
+        #    below is already computed in ai_providers._build_consensus and carried
+        #    through _run_shared_extraction's `result` — NO recomputation here. ──
+        "line_items": result.get("line_items", []),
+        "findings_detailed": result.get("findings_detailed", []),
+        "processor_markup": result.get("processor_markup"),
+        "interchange_cost": result.get("interchange_cost"),
+        "monthly_fees": result.get("monthly_fees"),
         "_providerCount": result.get("_providerCount", 0),
         "_providers": result.get("_providers", []),
         "_confidence": result.get("_confidence", "unknown"),
