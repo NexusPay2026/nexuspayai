@@ -930,6 +930,52 @@ def _as_float(v):
         return None
 
 
+# ── Deterministic fee re-categorization (Marc-approved). Ordered, case-insensitive, FIRST MATCH
+#    WINS (specific before broad). AIs mis-assign categories (processor-markup fees dumped into
+#    misc, etc.); this rewrites only 'category'. The scalars stay the authoritative headline totals.
+_RECAT_RULES = [
+    ("NQ",         re.compile(r"(non[-\s]?qual|nonqual|\bnq\b|downgrade)", re.IGNORECASE), "processor"),
+    ("AUTH",       re.compile(r"(\bauth|\bwat\b|\btrans)", re.IGNORECASE),                 "processor"),
+    ("FEE_TOTALS", re.compile(r"fee\s+totals?\b", re.IGNORECASE),                          "processor"),
+    ("ASSESS",     re.compile(r"(assessment|access\s+charge|nabu)", re.IGNORECASE),        "interchange"),
+    ("MONTHLY",    re.compile(r"(month|annual|compliance|dcnt)", re.IGNORECASE),           "monthly"),
+    ("MISC",       re.compile(r"(funding|next\s+day)", re.IGNORECASE),                     "misc"),
+]
+# A name that looks like a NETWORK integrity/pass-through fee despite containing 'AUTH' is ambiguous
+# — keep its original category and flag it for review rather than confidently calling it processor.
+_AMBIG_AUTH_RE = re.compile(r"(intgry|integrity|network|ntwk)", re.IGNORECASE)
+
+
+def _recategorize_line_items(items: List[Dict], scalars: Dict) -> List[Dict]:
+    """Rewrite each item's 'category' by name rule (first match wins). Unmatched items KEEP their
+    original AI category (safety net — never silently misplaced). An unmatched line whose amount
+    equals the monthly_fees scalar is anchored to monthly (the generic 'Other Fees' recurring line).
+    Only 'category' is touched — scalars, role, page and verbatim are untouched. Returns a list of
+    ambiguity notes (e.g. AUTH-vs-network) for human review."""
+    monthly_fees = _as_float(scalars.get("monthly_fees"))
+    ambiguities: List[Dict] = []
+    for it in items:
+        name = str(it.get("name", ""))
+        matched = None
+        for rid, rx, cat in _RECAT_RULES:
+            if rx.search(name):
+                if rid == "AUTH" and _AMBIG_AUTH_RE.search(name):
+                    ambiguities.append({"ambiguous_category": name, "matched": "AUTH",
+                                        "kept_as": it.get("category"),
+                                        "note": "looks like a network pass-through - review AUTH match"})
+                    matched = "AMBIGUOUS"
+                    break
+                matched = cat
+                break
+        if matched and matched != "AMBIGUOUS":
+            it["category"] = matched
+        elif matched is None:
+            amt = _as_float(it.get("amount"))
+            if monthly_fees and amt is not None and abs(amt - monthly_fees) <= max(0.5, abs(monthly_fees) * 0.01):
+                it["category"] = "monthly"   # amount-anchor: the generic 'Other Fees' == monthly_fees
+    return ambiguities
+
+
 def _reconcile_line_items(items: List[Dict], scalars: Dict) -> tuple:
     """Tag each merged line item role = detail | subtotal | grand_total and emit an AUTHORITATIVE
     category_summary. SCALARS-FIRST: category totals come from the AI's stated/derived figures
@@ -940,6 +986,8 @@ def _reconcile_line_items(items: List[Dict], scalars: Dict) -> tuple:
     Non-destructive: adds 'role', NEVER drops a row — every detail keeps its page + verbatim as a
     provenance atom. Returns (tagged_items, category_summary, discrepancies)."""
     items = [dict(it) for it in (items or []) if isinstance(it, dict)]
+    # Fix AI-mis-assigned categories BEFORE role tagging / summary (both read it['category']).
+    recat_ambiguities = _recategorize_line_items(items, scalars)
     total_fees = _as_float(scalars.get("total_fees"))
 
     def tol(x):
@@ -954,7 +1002,7 @@ def _reconcile_line_items(items: List[Dict], scalars: Dict) -> tuple:
             it["role"] = "grand_total"
 
     summary: Dict[str, Any] = {}
-    discrepancies: List[Dict] = []
+    discrepancies: List[Dict] = list(recat_ambiguities)   # seed with re-categorization ambiguity notes
     for cat in _LINE_ITEM_CATS:
         rows = [it for it in items
                 if (it.get("category") or "misc").lower() == cat and it.get("role") != "grand_total"]
