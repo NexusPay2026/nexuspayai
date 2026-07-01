@@ -921,6 +921,13 @@ _ROLLUP_NAME_RE = re.compile(r"(sub-?total|\btotal\b)", re.IGNORECASE)
 _GRAND_TOTAL_NAME_RE = re.compile(r"(total\s+charges\s+and\s+fees|grand\s+total|total\s+fees\s+due|total\s+amount\s+due|net\s+charges)", re.IGNORECASE)
 _CATEGORY_SCALAR = {"interchange": "interchange_cost", "processor": "processor_markup", "monthly": "monthly_fees"}
 _LINE_ITEM_CATS = ("interchange", "processor", "monthly", "misc")
+# A category discrepancy is only worth a human look when the detail-sum diverges MATERIALLY from the
+# authoritative scalar — NOT on the routine small gap (scalars are residuals, so a modest gap is
+# normal on essentially every statement, which would make the review flag meaningless noise). Flag
+# only when the gap exceeds BOTH thresholds: > max(15% of the scalar, $25). The 15% catches large
+# divergences on big categories; the $25 floor stops small-dollar categories (e.g. monthly) firing.
+_DISCREPANCY_REL = 0.15
+_DISCREPANCY_ABS = 25.0
 
 
 def _as_float(v):
@@ -946,33 +953,24 @@ _RECAT_RULES = [
 _AMBIG_AUTH_RE = re.compile(r"(intgry|integrity|network|ntwk)", re.IGNORECASE)
 
 
-def _recategorize_line_items(items: List[Dict], scalars: Dict) -> List[Dict]:
+def _recategorize_line_items(items: List[Dict]) -> List[Dict]:
     """Rewrite each item's 'category' by name rule (first match wins). Unmatched items KEEP their
-    original AI category (safety net — never silently misplaced). An unmatched line whose amount
-    equals the monthly_fees scalar is anchored to monthly (the generic 'Other Fees' recurring line).
-    Only 'category' is touched — scalars, role, page and verbatim are untouched. Returns a list of
-    ambiguity notes (e.g. AUTH-vs-network) for human review."""
-    monthly_fees = _as_float(scalars.get("monthly_fees"))
+    original AI category (safety net — never silently misplaced). Only 'category' is touched —
+    scalars, role, page and verbatim are untouched. Returns a list of ambiguity notes (e.g.
+    AUTH-vs-network) for human review."""
     ambiguities: List[Dict] = []
     for it in items:
         name = str(it.get("name", ""))
-        matched = None
         for rid, rx, cat in _RECAT_RULES:
             if rx.search(name):
                 if rid == "AUTH" and _AMBIG_AUTH_RE.search(name):
                     ambiguities.append({"ambiguous_category": name, "matched": "AUTH",
                                         "kept_as": it.get("category"),
                                         "note": "looks like a network pass-through - review AUTH match"})
-                    matched = "AMBIGUOUS"
-                    break
-                matched = cat
+                    break   # ambiguous -> keep original category, do not re-assign
+                it["category"] = cat
                 break
-        if matched and matched != "AMBIGUOUS":
-            it["category"] = matched
-        elif matched is None:
-            amt = _as_float(it.get("amount"))
-            if monthly_fees and amt is not None and abs(amt - monthly_fees) <= max(0.5, abs(monthly_fees) * 0.01):
-                it["category"] = "monthly"   # amount-anchor: the generic 'Other Fees' == monthly_fees
+        # no rule matched -> keep the AI's original category (safety net)
     return ambiguities
 
 
@@ -987,7 +985,7 @@ def _reconcile_line_items(items: List[Dict], scalars: Dict) -> tuple:
     provenance atom. Returns (tagged_items, category_summary, discrepancies)."""
     items = [dict(it) for it in (items or []) if isinstance(it, dict)]
     # Fix AI-mis-assigned categories BEFORE role tagging / summary (both read it['category']).
-    recat_ambiguities = _recategorize_line_items(items, scalars)
+    recat_ambiguities = _recategorize_line_items(items)
     total_fees = _as_float(scalars.get("total_fees"))
 
     def tol(x):
@@ -1051,7 +1049,8 @@ def _reconcile_line_items(items: List[Dict], scalars: Dict) -> tuple:
             total, source = detail_sum, "sum_of_details"
 
         # Discrepancy: authoritative figure vs the sum of detail atoms (feeds NEEDS-REVIEW).
-        if source != "sum_of_details" and detail_sum > 0 and abs(total - detail_sum) > tol(total):
+        if source != "sum_of_details" and detail_sum > 0 \
+                and abs(total - detail_sum) > max(_DISCREPANCY_ABS, abs(total) * _DISCREPANCY_REL):
             discrepancies.append({"category": cat, "authoritative": round(total, 2),
                                   "source": source, "sum_of_details": round(detail_sum, 2)})
 
