@@ -55,12 +55,13 @@ def _max_tokens(provider: str) -> int:
     return min(settings.AI_MAX_TOKENS, _PROVIDER_TOKEN_CAP.get(provider, 16000))
 
 
-# Per-provider wall-clock cap for the audit gather. The promise is ACCURATE results
-# within ~90s, NOT waiting for every provider — a slow/hung provider (e.g. Claude
-# ReadTimeout) becomes a named _error and the providers that returned are used.
-# 90s leaves ~15-20s headroom under the 120s frontend AbortController (upload +
-# rasterize + parse). Env-overridable; keep <= ~100 unless the frontend cap is raised too.
-_PROVIDER_TIMEOUT_S = int(os.getenv("AI_PROVIDER_TIMEOUT", "90"))
+# Per-provider wall-clock caps. run_audit_all_providers returns on QUORUM (the instant 3
+# COMPLETE results land) instead of waiting for all four, so a typical run finishes when the
+# fast providers do (~25-40s), not when the slowest does. GPT-4o/Grok/Gemini share this cap;
+# Claude gets a shorter leash below (it consistently runs long and must not hold up the other
+# three). Both env-overridable; keep the whole run well under the 120s frontend AbortController.
+_PROVIDER_TIMEOUT_S = int(os.getenv("AI_PROVIDER_TIMEOUT", "40"))
+_CLAUDE_TIMEOUT_S = int(os.getenv("AI_CLAUDE_TIMEOUT", "25"))
 # ONE retry on a FAST transient failure (busy/blip/truncated-JSON), after this backoff.
 # The retry runs INSIDE the per-provider wait_for budget above, so it can never exceed
 # the cap or blow the 120s frontend budget: a slow call is cancelled by wait_for ->
@@ -738,6 +739,24 @@ def _provider_summary(r: Dict) -> Dict[str, Any]:
     }
 
 
+def _provider_timeout(name: str) -> int:
+    """Claude runs on a short leash so a slow Claude never holds up the other three."""
+    return _CLAUDE_TIMEOUT_S if name == "Claude" else _PROVIDER_TIMEOUT_S
+
+
+def _is_complete(r: Dict) -> bool:
+    """A result counts toward quorum only if it carries real forensic data — line items OR a
+    core figure — never an empty/garbage parse. (line_items are ALSO merged ACROSS providers
+    in _build_consensus, so a thin-but-valid list here still yields a rich breakdown.)"""
+    if not isinstance(r, dict):
+        return False
+    items = r.get("line_items")
+    if isinstance(items, list) and len(items) > 0:
+        return True
+    return any(r.get(k) not in (None, "", 0, 0.0)
+               for k in ("monthly_volume", "total_fees", "transaction_count"))
+
+
 async def run_audit_all_providers(file_b64: str, media_type: str,
                                   pages: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
     """
@@ -794,22 +813,42 @@ async def run_audit_all_providers(file_b64: str, media_type: str,
                 raise
 
     async def _run(name, func):
+        # Per-provider cap (Claude on a short leash) INCLUDING its one retry. Returns a tagged
+        # outcome; only COMPLETE results are counted toward quorum by the caller below.
         try:
-            # Cap each provider (INCLUDING its one retry) so a slow/hung one can't blow
-            # the budget — it becomes a named timeout error and the rest still count.
-            parsed = await asyncio.wait_for(_attempt(name, func), timeout=_PROVIDER_TIMEOUT_S)
+            parsed = await asyncio.wait_for(_attempt(name, func), timeout=_provider_timeout(name))
             parsed["_provider"] = name
-            results.append(parsed)
-            logger.info("Provider OK: %s", name)
+            if _is_complete(parsed):
+                return ("ok", name, parsed)
+            return ("incomplete", name, "returned but no usable forensic data")
         except asyncio.TimeoutError:
-            errors.append({"provider": name, "error": f"timed out after {_PROVIDER_TIMEOUT_S}s"})
-            logger.warning("Provider TIMEOUT: %s (%ds)", name, _PROVIDER_TIMEOUT_S)
+            return ("timeout", name, f"timed out after {_provider_timeout(name)}s")
         except Exception as e:
-            errors.append({"provider": name, "error": str(e) or type(e).__name__})
-            logger.warning("Provider FAILED: %s — %s", name, e)
+            return ("error", name, str(e) or type(e).__name__)
 
-    # return_exceptions=True so a stray failure inside a _run can never abort the whole batch.
-    await asyncio.gather(*[_run(name, func) for name, func in providers], return_exceptions=True)
+    # RETURN-ON-QUORUM: act the instant the 3rd COMPLETE result lands — don't wait for the 4th
+    # or the full cap. If fewer than quorum complete, as_completed drains to the caps and we
+    # return whatever DID complete (the floor is "return what completed", quorum is the fast exit).
+    tasks = [asyncio.create_task(_run(name, func)) for name, func in providers]
+    quorum = min(3, len(providers))
+    try:
+        for fut in asyncio.as_completed(tasks):
+            kind, name, payload = await fut
+            if kind == "ok":
+                results.append(payload)
+                logger.info("Provider OK: %s", name)
+            else:
+                errors.append({"provider": name, "error": payload})
+                logger.warning("Provider %s: %s — %s", kind.upper(), name, payload)
+            if len(results) >= quorum:
+                break
+    finally:
+        # Cancel the stragglers (e.g. a slow Claude) and await the cancellations so no task is
+        # left pending; return_exceptions keeps a cancelled/failing task from propagating.
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     # Always log the full run summary so partial failures are visible in Render logs.
     logger.info("Audit run: attempted=%d succeeded=%d failed=%d errors=%s",
