@@ -594,6 +594,11 @@ async def public_extract_statement(req: PublicExtractRequest, db: AsyncSession =
         "processor_markup": result.get("processor_markup"),
         "interchange_cost": result.get("interchange_cost"),
         "monthly_fees": result.get("monthly_fees"),
+        # Authoritative per-category totals (scalars-first, computed in _reconcile_line_items).
+        # The frontend reads category_summary as the source of truth and falls back to summing
+        # line_items only when it's absent — sending it stops that roll-up double-count.
+        "category_summary": result.get("category_summary"),
+        "category_discrepancies": result.get("category_discrepancies", []),
         "_providerCount": result.get("_providerCount", 0),
         "_providers": result.get("_providers", []),
         "_confidence": result.get("_confidence", "unknown"),
