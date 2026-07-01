@@ -916,6 +916,94 @@ async def quick_identity_extract(file_b64: str, media_type: str,
         return {}
 
 
+# ── Fee-categorization reconciliation (Option A: trust stated totals, keep detail as atoms) ──
+_ROLLUP_NAME_RE = re.compile(r"(sub-?total|\btotal\b)", re.IGNORECASE)
+_GRAND_TOTAL_NAME_RE = re.compile(r"(total\s+fees|grand\s+total|total\s+charges|total\s+amount|net\s+charges)", re.IGNORECASE)
+_CATEGORY_SCALAR = {"interchange": "interchange_cost", "processor": "processor_markup", "monthly": "monthly_fees"}
+_LINE_ITEM_CATS = ("interchange", "processor", "monthly", "misc")
+
+
+def _as_float(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _reconcile_line_items(items: List[Dict], scalars: Dict) -> tuple:
+    """Classify each merged line item as role = detail | subtotal | grand_total and emit an
+    AUTHORITATIVE per-category summary, so no surface re-aggregates line items (and double-counts
+    a stated total together with its own components). Option A: trust the stated total where the
+    statement provides one; else the category scalar (processor markup is DERIVED per Marc's
+    accounting: total_fees - interchange - assessments/third-party); else the sum of details.
+    Non-destructive: adds 'role' to each row, NEVER drops one — every detail row keeps its page +
+    verbatim as a provenance-ready atom. Returns (tagged_items, category_summary, discrepancies)."""
+    items = [dict(it) for it in (items or []) if isinstance(it, dict)]
+    total_fees = _as_float(scalars.get("total_fees"))
+
+    def tol(x):
+        return max(1.0, abs(x) * 0.01)
+
+    # Grand total (statement-wide "Total Fees") — tagged and excluded from category math.
+    for it in items:
+        amt = _as_float(it.get("amount"))
+        if _GRAND_TOTAL_NAME_RE.search(str(it.get("name", ""))) or \
+           (total_fees is not None and amt is not None and abs(amt - total_fees) <= tol(total_fees)):
+            it["role"] = "grand_total"
+
+    summary: Dict[str, Any] = {}
+    discrepancies: List[Dict] = []
+    for cat in _LINE_ITEM_CATS:
+        rows = [it for it in items
+                if (it.get("category") or "misc").lower() == cat and it.get("role") != "grand_total"]
+        # Stated subtotal: a 'Total ...' named row (authoritative), else an UNLABELED row equal to
+        # the sum of >= 2 other rows in this category AND >= the largest of them (avoids 1-vs-1 FPs).
+        subtotal_row = None
+        named = [it for it in rows if _ROLLUP_NAME_RE.search(str(it.get("name", "")))]
+        if named:
+            subtotal_row = max(named, key=lambda it: _as_float(it.get("amount")) or 0.0)
+        else:
+            for it in rows:
+                amt = _as_float(it.get("amount"))
+                if amt is None:
+                    continue
+                others = [o for o in rows if o is not it]
+                if len(others) < 2:
+                    continue
+                others_sum = sum(_as_float(o.get("amount")) or 0.0 for o in others)
+                others_max = max((_as_float(o.get("amount")) or 0.0) for o in others)
+                if others_sum > 0 and amt >= others_max and abs(amt - others_sum) <= tol(amt):
+                    subtotal_row = it
+                    break
+
+        for it in rows:
+            if it is subtotal_row:
+                it["role"] = "subtotal"
+            elif it.get("role") != "grand_total":
+                it["role"] = "detail"
+
+        detail_sum = sum(_as_float(it.get("amount")) or 0.0 for it in rows if it is not subtotal_row)
+        scalar_val = _as_float(scalars.get(_CATEGORY_SCALAR.get(cat))) if cat in _CATEGORY_SCALAR else None
+
+        # Authoritative total: stated subtotal > category scalar > sum of details.
+        if subtotal_row is not None:
+            total = _as_float(subtotal_row.get("amount")) or 0.0
+            source = "subtotal"
+            if detail_sum > 0 and abs(total - detail_sum) > tol(total):   # stated total != detail sum
+                discrepancies.append({"category": cat, "stated_total": round(total, 2),
+                                      "sum_of_details": round(detail_sum, 2)})
+        elif scalar_val is not None:
+            total = scalar_val
+            source = "derived" if cat == "processor" else "scalar"
+        else:
+            total = detail_sum
+            source = "sum_of_details"
+
+        summary[cat] = {"count": len(rows), "total": round(total, 2), "source": source}
+
+    return items, summary, discrepancies
+
+
 def _build_consensus(results: List[Dict]) -> Dict:
     """Merge results from multiple providers using tolerance-band averaging / median."""
     numeric_fields = [
@@ -971,6 +1059,13 @@ def _build_consensus(results: List[Dict]) -> Dict:
                 seen_items.add(key)
                 all_items.append(item)
     consensus["line_items"] = all_items
+    # Tag rollup-vs-detail rows (provenance-ready) + emit authoritative per-category totals so no
+    # surface re-aggregates line items and double-counts a stated total with its own components.
+    tagged_items, category_summary, cat_discrepancies = _reconcile_line_items(all_items, consensus)
+    consensus["line_items"] = tagged_items
+    consensus["category_summary"] = category_summary
+    if cat_discrepancies:
+        consensus["category_discrepancies"] = cat_discrepancies
 
     seen_findings = set()
     all_findings = []
