@@ -918,7 +918,7 @@ async def quick_identity_extract(file_b64: str, media_type: str,
 
 # ── Fee-categorization reconciliation (Option A: trust stated totals, keep detail as atoms) ──
 _ROLLUP_NAME_RE = re.compile(r"(sub-?total|\btotal\b)", re.IGNORECASE)
-_GRAND_TOTAL_NAME_RE = re.compile(r"(total\s+fees|grand\s+total|total\s+charges|total\s+amount|net\s+charges)", re.IGNORECASE)
+_GRAND_TOTAL_NAME_RE = re.compile(r"(total\s+charges\s+and\s+fees|grand\s+total|total\s+fees\s+due|total\s+amount\s+due|net\s+charges)", re.IGNORECASE)
 _CATEGORY_SCALAR = {"interchange": "interchange_cost", "processor": "processor_markup", "monthly": "monthly_fees"}
 _LINE_ITEM_CATS = ("interchange", "processor", "monthly", "misc")
 
@@ -931,24 +931,26 @@ def _as_float(v):
 
 
 def _reconcile_line_items(items: List[Dict], scalars: Dict) -> tuple:
-    """Classify each merged line item as role = detail | subtotal | grand_total and emit an
-    AUTHORITATIVE per-category summary, so no surface re-aggregates line items (and double-counts
-    a stated total together with its own components). Option A: trust the stated total where the
-    statement provides one; else the category scalar (processor markup is DERIVED per Marc's
-    accounting: total_fees - interchange - assessments/third-party); else the sum of details.
-    Non-destructive: adds 'role' to each row, NEVER drops one — every detail row keeps its page +
-    verbatim as a provenance-ready atom. Returns (tagged_items, category_summary, discrepancies)."""
+    """Tag each merged line item role = detail | subtotal | grand_total and emit an AUTHORITATIVE
+    category_summary. SCALARS-FIRST: category totals come from the AI's stated/derived figures
+    (interchange_cost = the stated Total Interchange; processor_markup = the DERIVED residual
+    total_fees - interchange - assessments/third-party; monthly_fees) — NEVER by row-picking, which
+    mis-fired on rollup rows (e.g. 'Total American Express') and un-labeled rollups (e.g. 'Credit
+    Card Processing Charges'). line_items are kept purely for the traceable breakdown + role tags.
+    Non-destructive: adds 'role', NEVER drops a row — every detail keeps its page + verbatim as a
+    provenance atom. Returns (tagged_items, category_summary, discrepancies)."""
     items = [dict(it) for it in (items or []) if isinstance(it, dict)]
     total_fees = _as_float(scalars.get("total_fees"))
 
     def tol(x):
         return max(1.0, abs(x) * 0.01)
 
-    # Grand total (statement-wide "Total Fees") — tagged and excluded from category math.
+    # Grand total: PRIMARY signal is amount == total_fees; a TIGHT name is only secondary (so a
+    # category 'Total Charges' is not mistaken for the statement grand total).
     for it in items:
         amt = _as_float(it.get("amount"))
-        if _GRAND_TOTAL_NAME_RE.search(str(it.get("name", ""))) or \
-           (total_fees is not None and amt is not None and abs(amt - total_fees) <= tol(total_fees)):
+        if (total_fees is not None and amt is not None and abs(amt - total_fees) <= tol(total_fees)) \
+           or _GRAND_TOTAL_NAME_RE.search(str(it.get("name", ""))):
             it["role"] = "grand_total"
 
     summary: Dict[str, Any] = {}
@@ -956,48 +958,54 @@ def _reconcile_line_items(items: List[Dict], scalars: Dict) -> tuple:
     for cat in _LINE_ITEM_CATS:
         rows = [it for it in items
                 if (it.get("category") or "misc").lower() == cat and it.get("role") != "grand_total"]
-        # Stated subtotal: a 'Total ...' named row (authoritative), else an UNLABELED row equal to
-        # the sum of >= 2 other rows in this category AND >= the largest of them (avoids 1-vs-1 FPs).
-        subtotal_row = None
-        named = [it for it in rows if _ROLLUP_NAME_RE.search(str(it.get("name", "")))]
-        if named:
-            subtotal_row = max(named, key=lambda it: _as_float(it.get("amount")) or 0.0)
-        else:
-            for it in rows:
-                amt = _as_float(it.get("amount"))
-                if amt is None:
-                    continue
-                others = [o for o in rows if o is not it]
-                if len(others) < 2:
-                    continue
-                others_sum = sum(_as_float(o.get("amount")) or 0.0 for o in others)
-                others_max = max((_as_float(o.get("amount")) or 0.0) for o in others)
-                if others_sum > 0 and amt >= others_max and abs(amt - others_sum) <= tol(amt):
-                    subtotal_row = it
-                    break
+
+        # Rollup tagging (by identity — amounts can repeat): (a) named 'Total/Subtotal' rows;
+        # (b) an unlabeled row ~ the sum of >= 2 others AND >= the largest; (c) an unlabeled row
+        # near-EXACTLY equal to an already-found rollup (the same total under a different label,
+        # e.g. 'Credit Card Processing Charges' == 'Total Charges').
+        sub_ids = set()
+        for it in rows:
+            if _ROLLUP_NAME_RE.search(str(it.get("name", ""))):
+                sub_ids.add(id(it))
+        for it in rows:
+            if id(it) in sub_ids:
+                continue
+            amt = _as_float(it.get("amount"))
+            if amt is None:
+                continue
+            others = [o for o in rows if o is not it]
+            if len(others) >= 2:
+                osum = sum(_as_float(o.get("amount")) or 0.0 for o in others)
+                omax = max((_as_float(o.get("amount")) or 0.0) for o in others)
+                if osum > 0 and amt >= omax and abs(amt - osum) <= tol(amt):
+                    sub_ids.add(id(it))
+        sub_amts = [(_as_float(r.get("amount")) or 0.0) for r in rows if id(r) in sub_ids]
+        for it in rows:
+            if id(it) in sub_ids:
+                continue
+            amt = _as_float(it.get("amount"))
+            if amt is not None and any(abs(amt - sa) <= 0.02 for sa in sub_amts):   # near-exact = same total, different label
+                sub_ids.add(id(it))
 
         for it in rows:
-            if it is subtotal_row:
-                it["role"] = "subtotal"
-            elif it.get("role") != "grand_total":
-                it["role"] = "detail"
+            it["role"] = "subtotal" if id(it) in sub_ids else "detail"
 
-        detail_sum = sum(_as_float(it.get("amount")) or 0.0 for it in rows if it is not subtotal_row)
+        detail_sum = sum(_as_float(it.get("amount")) or 0.0 for it in rows if it["role"] == "detail")
         scalar_val = _as_float(scalars.get(_CATEGORY_SCALAR.get(cat))) if cat in _CATEGORY_SCALAR else None
+        subtotal_amts = [(_as_float(it.get("amount")) or 0.0) for it in rows if it["role"] == "subtotal"]
 
-        # Authoritative total: stated subtotal > category scalar > sum of details.
-        if subtotal_row is not None:
-            total = _as_float(subtotal_row.get("amount")) or 0.0
-            source = "subtotal"
-            if detail_sum > 0 and abs(total - detail_sum) > tol(total):   # stated total != detail sum
-                discrepancies.append({"category": cat, "stated_total": round(total, 2),
-                                      "sum_of_details": round(detail_sum, 2)})
-        elif scalar_val is not None:
-            total = scalar_val
-            source = "derived" if cat == "processor" else "scalar"
+        # Authoritative total: category scalar (processor is DERIVED) > largest subtotal > detail sum.
+        if scalar_val is not None:
+            total, source = scalar_val, ("derived" if cat == "processor" else "scalar")
+        elif subtotal_amts:
+            total, source = max(subtotal_amts), "subtotal"
         else:
-            total = detail_sum
-            source = "sum_of_details"
+            total, source = detail_sum, "sum_of_details"
+
+        # Discrepancy: authoritative figure vs the sum of detail atoms (feeds NEEDS-REVIEW).
+        if source != "sum_of_details" and detail_sum > 0 and abs(total - detail_sum) > tol(total):
+            discrepancies.append({"category": cat, "authoritative": round(total, 2),
+                                  "source": source, "sum_of_details": round(detail_sum, 2)})
 
         summary[cat] = {"count": len(rows), "total": round(total, 2), "source": source}
 
