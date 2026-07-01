@@ -2753,6 +2753,10 @@ document.addEventListener('DOMContentLoaded', function() {
       // Handle downloadPDF(currentAudit)
       if (oc.indexOf('downloadPDF(currentAudit)') !== -1) { e.preventDefault(); e.stopImmediatePropagation(); downloadPDF(currentAudit); return; }
 
+      // Handle showReceipt('figkey','src',idx) — provenance evidence popover
+      var rcptMatch = oc.match(/showReceipt\('([a-z_]+)','([a-z]+)',(\d+)\)/);
+      if (rcptMatch) { e.preventDefault(); e.stopImmediatePropagation(); showReceipt(rcptMatch[1], rcptMatch[2], parseInt(rcptMatch[3])); return; }
+
       // Handle showMerchDetail(N)
       var mdMatch = oc.match(/showMerchDetail\((\d+)\)/);
       if (mdMatch) { e.preventDefault(); e.stopImmediatePropagation(); showMerchDetail(parseInt(mdMatch[1])); return; }
@@ -4372,22 +4376,24 @@ function renderAuditResults(d) {
         '</div>' +
         '<div style="text-align:right">' +
           '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.06em">Effective Rate</div>' +
-          '<div style="font-size:28px;font-weight:700;font-family:var(--mono);color:' + rateCol(eff) + ';letter-spacing:-.03em">' + fmtP(eff) + '</div>' +
+          ((typeof _hasProv==='function' && _hasProv(d,'effective_rate'))
+            ? '<div class="prov-inline" onclick="showReceipt(\'effective_rate\',\'audit\',0)" title="Click for evidence receipt" style="font-size:28px;font-weight:700;font-family:var(--mono);color:' + rateCol(eff) + ';letter-spacing:-.03em;cursor:pointer">' + fmtP(eff) + ' <span class="prov-flag-sm">◈</span></div>'
+            : '<div style="font-size:28px;font-weight:700;font-family:var(--mono);color:' + rateCol(eff) + ';letter-spacing:-.03em">' + fmtP(eff) + '</div>') +
           '<div style="font-family:var(--mono);font-size:9px;color:' + rateCol(eff) + '">' + (eff>2.5?'⚠ ABOVE BENCHMARK':eff>2.0?'▲ ABOVE TARGET':'✓ ON TARGET') + '</div>' +
         '</div>' +
       '</div>' +
     '</div>' +
     // Stats row 1
     '<div class="metric-grid cols-5" style="margin-bottom:8px">' +
-      statCard('Monthly Volume',   fmtK(d.monthly_volume),  'processed',        'c-info','t1') +
-      statCard('Total Fees',       fmtD(d.total_fees),       'all fees',         'c-dn','dn') +
-      statCard('Interchange Cost', fmtD(d.interchange_cost), 'network pass-thru','c-info','info') +
-      statCard('Processor Markup', fmtD(d.processor_markup), 'negotiable',       'c-warn','warn') +
+      statCardP(d,'audit',0,'monthly_volume',  'Monthly Volume',   fmtK(d.monthly_volume),  'processed',        'c-info','t1') +
+      statCardP(d,'audit',0,'total_fees',      'Total Fees',       fmtD(d.total_fees),       'all fees',         'c-dn','dn') +
+      statCardP(d,'audit',0,'interchange_cost','Interchange Cost', fmtD(d.interchange_cost), 'network pass-thru','c-info','info') +
+      statCardP(d,'audit',0,'processor_markup','Processor Markup', fmtD(d.processor_markup), 'negotiable',       'c-warn','warn') +
       statCard('Fixed Monthly',    fmtD(d.monthly_fees),     'stmt+PCI+svc',     'c-gold','gold') +
     '</div>' +
     // Stats row 2
     '<div class="metric-grid cols-5" style="margin-bottom:10px">' +
-      statCard('Transactions',  fmt(d.transaction_count,0),'this month',      'c-lime','lime') +
+      statCardP(d,'audit',0,'transaction_count','Transactions',  fmt(d.transaction_count,0),'this month',      'c-lime','lime') +
       statCard('Avg Ticket',    fmtD(d.avg_ticket),         'per transaction', 'c-info','info') +
       statCard('Credit Card %', fmtP(d.credit_card_pct,1),  'of volume',       'c-warn','warn') +
       statCard('Risk Score',    (d.risk_score||0)+'/100',   'overcharge risk', 'c-dn','dn') +
@@ -6020,9 +6026,9 @@ function showMerchDetail(i) {
   document.getElementById('mm-body').innerHTML =
     demoBanner + variantNote + addedBy +
     '<div class="metric-grid cols-3" style="margin-bottom:12px">' +
-      statCard('Monthly Volume', fmtK(m.monthly_volume), 'processed', 'c-info','info') +
-      statCard('Total Fees',     fmtD(m.total_fees),      'all-in',    'c-dn','dn') +
-      statCard('Effective Rate', fmtP(m.effective_rate),  'current',   'c-warn','warn') +
+      statCardP(m,'port',i,'monthly_volume','Monthly Volume', fmtK(m.monthly_volume), 'processed', 'c-info','info') +
+      statCardP(m,'port',i,'total_fees',    'Total Fees',     fmtD(m.total_fees),      'all-in',    'c-dn','dn') +
+      statCardP(m,'port',i,'effective_rate','Effective Rate', fmtP(m.effective_rate),  'current',   'c-warn','warn') +
     '</div>' +
     '<div class="prog-grid" style="margin-bottom:10px">' + renderProgCards(m,p) + '</div>' +
     renderFindings(m);
@@ -7318,6 +7324,313 @@ async function _extractViaBackend(){
   }
   if(typeof setProgress==='function') setProgress(80, out.cache_hit?'Identical statement detected - using cached result...':'Consensus received...');
   return d;
+}
+</script>
+<style>
+/* ═══ PROVENANCE RECEIPT (Phase 2) ═══ */
+.prov-card{cursor:pointer}
+.prov-card:hover{border-color:var(--lime)!important}
+.prov-card .ml{display:flex;align-items:center;gap:5px}
+.prov-flag{display:inline-flex;align-items:center;justify-content:center;min-width:12px;height:12px;font-family:var(--mono);font-size:8px;font-weight:700;line-height:1;border-radius:2px;padding:0 2px}
+.prov-flag.ok{color:var(--lime);border:1px solid rgba(184,240,64,.4)}
+.prov-flag.rev{color:var(--warn);border:1px solid rgba(224,144,32,.5)}
+.prov-flag.est{color:var(--dn);border:1px solid rgba(224,64,80,.6);background:rgba(224,64,80,.08)}
+.prov-flag-sm{font-size:11px;color:var(--lime);vertical-align:middle}
+.prov-inline{cursor:pointer;transition:opacity .12s}
+.prov-inline:hover{opacity:.78}
+.receipt-modal{width:460px;max-width:94vw}
+.receipt-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:14px}
+.receipt-kicker{font-family:var(--mono);font-size:8px;letter-spacing:.14em;color:var(--lime);text-transform:uppercase;margin-bottom:3px}
+.receipt-title{font-size:15px;font-weight:700;letter-spacing:-.01em;color:var(--t1)}
+.receipt-x{background:transparent;border:1px solid var(--b1);color:var(--t3);width:24px;height:24px;border-radius:4px;cursor:pointer;font-size:11px;flex-shrink:0;line-height:1}
+.receipt-x:hover{color:var(--t1);border-color:var(--b2)}
+.receipt-headline{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.receipt-badge{font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.06em;padding:3px 8px;border:1px solid var(--t2);border-radius:3px}
+.receipt-value{font-family:var(--mono);font-size:26px;font-weight:700;letter-spacing:-.03em;color:var(--t1)}
+.receipt-conf{display:flex;align-items:center;gap:8px;margin-bottom:12px}
+.receipt-conf-lbl{font-family:var(--mono);font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:.06em;flex-shrink:0}
+.receipt-conf-track{flex:1;height:6px;background:var(--s3);border-radius:3px;overflow:hidden;min-width:80px}
+.receipt-conf-fill{height:100%;border-radius:3px;transition:width .2s}
+.receipt-conf-pct{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--t2);flex-shrink:0}
+.receipt-review{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:8px 11px;margin-bottom:12px;background:rgba(224,64,80,.08);border:1px solid rgba(224,64,80,.35);border-radius:4px}
+.receipt-review-tag{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--dn);letter-spacing:.04em}
+.receipt-review-why{font-family:var(--mono);font-size:9px;color:var(--t2)}
+.receipt-sec-lbl{font-family:var(--mono);font-size:8px;letter-spacing:.1em;color:var(--t3);text-transform:uppercase;margin-bottom:6px}
+.receipt-src{padding:10px 12px;background:var(--s2);border:1px solid var(--b1);border-radius:4px;margin-bottom:12px}
+.receipt-page{font-family:var(--mono);font-size:10px;color:var(--info);margin-bottom:5px}
+.receipt-quote{font-size:12px;color:var(--t1);line-height:1.5;font-style:italic;border-left:2px solid var(--lime);padding-left:9px}
+.receipt-basis{margin-top:6px;font-family:var(--mono);font-size:10px;color:var(--t2)}
+.receipt-basis-lbl{color:var(--warn)}
+.receipt-nosrc{font-family:var(--mono);font-size:9px;color:var(--t3)}
+.receipt-providers{margin-bottom:12px}
+.receipt-ptable{display:flex;flex-direction:column;gap:4px}
+.receipt-prow{display:grid;grid-template-columns:64px 1fr 74px 40px 34px auto;align-items:center;gap:6px;padding:5px 7px;background:var(--s2);border:1px solid var(--b1);border-left:2px solid var(--b1);border-radius:3px}
+.receipt-prow.disagree{border-left-color:var(--warn);background:rgba(224,144,32,.05)}
+.receipt-ppill{font-family:var(--mono);font-size:8px;font-weight:700;text-align:center;padding:1px 4px;border:1px solid var(--info);border-radius:2px}
+.receipt-pval{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--t1)}
+.receipt-pcls{font-family:var(--mono);font-size:8px;font-weight:600}
+.receipt-pconf{font-family:var(--mono);font-size:9px;color:var(--t2);text-align:right}
+.receipt-ppage{font-family:var(--mono);font-size:9px;color:var(--t3);text-align:right}
+.receipt-pflag{color:var(--warn);font-size:10px}
+.receipt-foot{font-family:var(--mono);font-size:8px;color:var(--t3);line-height:1.6;border-top:1px solid var(--b1);padding-top:9px}
+</style>
+<script>
+/* ═══════════════════════════════════════════════════════════════
+   PROVENANCE RECEIPT (Phase 2 — one-click evidence)
+   Data source: the live /api/audit/run response only. Per-provider
+   provenance lives in d._providerResults[i].provenance[figkey] as
+   {value, class, page, quote, basis, confidence}. There is no
+   consensus-level provenance and the /api/merchants list endpoint
+   does NOT serialize provider_results — so receipts appear on the
+   audit-results view and on the detail modal of merchants audited
+   THIS session (portfolio[0]). Legacy/backend-loaded merchants have
+   no provenance and degrade gracefully (no click affordance).
+   All statement-derived text (quote, basis) is inserted via
+   textContent — never innerHTML — because it is untrusted input.
+   ═══════════════════════════════════════════════════════════════ */
+(function(){
+  var PROV_LABELS = {
+    monthly_volume:'Monthly Volume', total_fees:'Total Fees',
+    transaction_count:'Transactions', interchange_cost:'Interchange Cost',
+    processor_markup:'Processor Markup', effective_rate:'Effective Rate'
+  };
+  var PROV_COLORS = { 'Claude':'var(--lime)', 'GPT-4o':'var(--up)', 'Grok':'var(--purple)', 'Gemini':'var(--info)' };
+
+  function _pnum(v){
+    if(v==null) return null;
+    var n=(typeof v==='number')?v:parseFloat(String(v).replace(/[^0-9.\-]/g,''));
+    return isNaN(n)?null:n;
+  }
+  function _pfmt(figkey, v){
+    var n=_pnum(v); if(n==null) return null;
+    if(figkey==='effective_rate') return (typeof fmtP==='function')?fmtP(n):(n.toFixed(2)+'%');
+    if(figkey==='transaction_count') return (typeof fmt==='function')?fmt(n,0):String(Math.round(n));
+    return (typeof fmtD==='function')?fmtD(n):('$'+n.toFixed(2));
+  }
+  // Collect each provider's provenance entry for one figure.
+  function _provEntries(d, figkey){
+    var out=[];
+    if(!d || !Array.isArray(d._providerResults)) return out;
+    d._providerResults.forEach(function(pr){
+      if(!pr) return;
+      var pv = pr.provenance && pr.provenance[figkey];
+      if(!pv || typeof pv!=='object') return;
+      out.push({
+        provider: pr.provider || '?',
+        value: (typeof pv.value!=='undefined' && pv.value!==null) ? pv.value : pr[figkey],
+        cls: (pv['class']!=null ? String(pv['class']) : '').toUpperCase(),
+        page: pv.page,
+        quote: (pv.quote!=null ? String(pv.quote) : ''),
+        basis: (pv.basis!=null ? String(pv.basis) : ''),
+        confidence: (typeof pv.confidence==='number') ? pv.confidence : null
+      });
+    });
+    return out;
+  }
+  // Fold the per-provider entries into a headline reading.
+  function _fold(entries){
+    if(!entries.length) return null;
+    var rank={EXTRACTED:3, DERIVED:2, ESTIMATED:1};
+    var best=entries[0], bestScore=-1, maxConf=0, anyEst=false;
+    entries.forEach(function(e){
+      var conf=(typeof e.confidence==='number')?e.confidence:0;
+      if(conf>maxConf) maxConf=conf;
+      if(e.cls==='ESTIMATED') anyEst=true;
+      var score=(rank[e.cls]||0)*10 + conf;
+      if(score>bestScore){ bestScore=score; best=e; }
+    });
+    var nums=entries.map(function(e){return _pnum(e.value);}).filter(function(v){return v!=null;});
+    var base=_pnum(best.value);
+    if(base==null && nums.length) base=nums[0];
+    var agree=true;
+    if(nums.length>1 && base!=null){
+      agree = nums.every(function(v){ return Math.abs(v-base) <= Math.abs(base)*0.05 + 0.01; });
+    }
+    var needsReview = (best.cls==='ESTIMATED') || anyEst || (maxConf>0 && maxConf<0.5) || !agree;
+    return { best:best, cls:best.cls||'', maxConf:maxConf, agree:agree, needsReview:needsReview, base:base, count:entries.length };
+  }
+  // Expose helpers for the card renderers.
+  window._provEntries = _provEntries;
+  window._provFold = _fold;
+  window._hasProv = function(d, figkey){ return _provEntries(d, figkey).length > 0; };
+
+  function _mk(tag, cls, txt){
+    var e=document.createElement(tag);
+    if(cls) e.className=cls;
+    if(txt!=null && txt!=='') e.textContent=String(txt);
+    return e;
+  }
+  function _clsColor(cls){
+    if(cls==='EXTRACTED') return 'var(--lime)';
+    if(cls==='DERIVED') return 'var(--warn)';
+    if(cls==='ESTIMATED') return 'var(--dn)';
+    return 'var(--t2)';
+  }
+  function _confColor(c){
+    if(c==null) return 'var(--t3)';
+    if(c>=0.7) return 'var(--up)';
+    if(c>=0.5) return 'var(--warn)';
+    return 'var(--dn)';
+  }
+
+  function _ensureOverlay(){
+    var ov=document.getElementById('receipt-overlay');
+    if(ov) return ov;
+    ov=document.createElement('div');
+    ov.className='overlay';
+    ov.id='receipt-overlay';
+    var modal=document.createElement('div');
+    modal.className='modal receipt-modal';
+    modal.id='receipt-modal';
+    ov.appendChild(modal);
+    document.body.appendChild(ov);
+    ov.addEventListener('click', function(e){ if(e.target===ov) closeReceipt(); });
+    return ov;
+  }
+
+  window.closeReceipt = function(){
+    var ov=document.getElementById('receipt-overlay');
+    if(ov) ov.classList.remove('open');
+  };
+
+  window.showReceipt = function(figkey, src, idx){
+    var d = (src==='audit') ? (window.currentAudit||null)
+          : (src==='port') ? (window.portfolio && window.portfolio[idx]) : null;
+    var entries = _provEntries(d, figkey);
+    if(!entries.length) return; // graceful no-op — no provenance for this figure
+    var fold=_fold(entries);
+    var label = PROV_LABELS[figkey] || figkey;
+
+    var ov=_ensureOverlay();
+    var modal=document.getElementById('receipt-modal');
+    while(modal.firstChild) modal.removeChild(modal.firstChild);
+
+    // ── Header ──
+    var head=_mk('div','receipt-head');
+    var htxt=_mk('div',null);
+    htxt.appendChild(_mk('div','receipt-kicker','EVIDENCE RECEIPT'));
+    htxt.appendChild(_mk('div','receipt-title', label));
+    head.appendChild(htxt);
+    var xbtn=_mk('button','receipt-x','✕');
+    xbtn.setAttribute('type','button');
+    xbtn.addEventListener('click', function(){ closeReceipt(); });
+    head.appendChild(xbtn);
+    modal.appendChild(head);
+
+    // ── Headline: class badge + value ──
+    var hl=_mk('div','receipt-headline');
+    var badge=_mk('span','receipt-badge', fold.cls || 'UNCLASSIFIED');
+    badge.style.color=_clsColor(fold.cls);
+    badge.style.borderColor=_clsColor(fold.cls);
+    hl.appendChild(badge);
+    var valTxt=_pfmt(figkey, fold.best.value);
+    hl.appendChild(_mk('span','receipt-value', valTxt!=null?valTxt:'—'));
+    modal.appendChild(hl);
+
+    // ── Confidence band ──
+    if(fold.maxConf!=null && fold.maxConf>0){
+      var cwrap=_mk('div','receipt-conf');
+      cwrap.appendChild(_mk('div','receipt-conf-lbl','Confidence'));
+      var track=_mk('div','receipt-conf-track');
+      var fill=_mk('div','receipt-conf-fill');
+      var pct=Math.max(0,Math.min(1,fold.maxConf))*100;
+      fill.style.width=pct.toFixed(0)+'%';
+      fill.style.background=_confColor(fold.maxConf);
+      track.appendChild(fill);
+      cwrap.appendChild(track);
+      cwrap.appendChild(_mk('div','receipt-conf-pct', Math.round(pct)+'%'));
+      modal.appendChild(cwrap);
+    }
+
+    // ── NEEDS REVIEW banner ──
+    if(fold.needsReview){
+      var why=[];
+      if(fold.cls==='ESTIMATED') why.push('figure is ESTIMATED');
+      if(fold.maxConf!=null && fold.maxConf>0 && fold.maxConf<0.5) why.push('low confidence');
+      if(!fold.agree) why.push('providers disagree');
+      var banner=_mk('div','receipt-review');
+      banner.appendChild(_mk('span','receipt-review-tag','⚠ NEEDS REVIEW'));
+      if(why.length) banner.appendChild(_mk('span','receipt-review-why','— '+why.join(', ')));
+      modal.appendChild(banner);
+    }
+
+    // ── Source: page + verbatim quote (or basis for DERIVED) ──
+    var b=fold.best;
+    var srcBox=_mk('div','receipt-src');
+    srcBox.appendChild(_mk('div','receipt-sec-lbl','SOURCE'));
+    var pageNum=_pnum(b.page);
+    if(pageNum!=null) srcBox.appendChild(_mk('div','receipt-page','Statement page '+pageNum));
+    if(b.quote){
+      var q=_mk('div','receipt-quote');
+      q.textContent = '“'+b.quote+'”'; // textContent — untrusted statement text
+      srcBox.appendChild(q);
+    }
+    if(b.cls==='DERIVED' && b.basis){
+      var bs=_mk('div','receipt-basis');
+      bs.appendChild(_mk('span','receipt-basis-lbl','Basis: '));
+      bs.appendChild(_mk('span',null, b.basis)); // textContent via _mk
+      srcBox.appendChild(bs);
+    }
+    if(pageNum==null && !b.quote && !(b.cls==='DERIVED' && b.basis)){
+      srcBox.appendChild(_mk('div','receipt-nosrc','No source citation provided for this reading.'));
+    }
+    modal.appendChild(srcBox);
+
+    // ── Per-provider cross-verification ──
+    var pv=_mk('div','receipt-providers');
+    pv.appendChild(_mk('div','receipt-sec-lbl','CROSS-VERIFICATION · '+entries.length+' AI'+(entries.length>1?'s':'')));
+    var tbl=_mk('div','receipt-ptable');
+    entries.forEach(function(e){
+      var evNum=_pnum(e.value);
+      var disagree = (fold.base!=null) && (evNum!=null) && (Math.abs(evNum-fold.base) > Math.abs(fold.base)*0.05 + 0.01);
+      var row=_mk('div', disagree?'receipt-prow disagree':'receipt-prow');
+      var pc=PROV_COLORS[e.provider]||'var(--info)';
+      var pill=_mk('span','receipt-ppill', e.provider);
+      pill.style.color=pc; pill.style.borderColor=pc;
+      row.appendChild(pill);
+      var vtxt=_pfmt(figkey, e.value);
+      row.appendChild(_mk('span','receipt-pval', vtxt!=null?vtxt:'—'));
+      var tag=_mk('span','receipt-pcls', e.cls||'—');
+      tag.style.color=_clsColor(e.cls);
+      row.appendChild(tag);
+      row.appendChild(_mk('span','receipt-pconf', (e.confidence!=null)?(Math.round(e.confidence*100)+'%'):'—'));
+      var pg=_pnum(e.page);
+      row.appendChild(_mk('span','receipt-ppage', pg!=null?('p.'+pg):'—'));
+      row.appendChild(_mk('span','receipt-pflag', disagree?'⚠':''));
+      tbl.appendChild(row);
+    });
+    pv.appendChild(tbl);
+    modal.appendChild(pv);
+
+    // ── Footer ──
+    modal.appendChild(_mk('div','receipt-foot','4-AI cross-verified · every figure traces to the source statement.'));
+
+    ov.classList.add('open');
+  };
+
+  // Esc closes the receipt (registered once).
+  document.addEventListener('keydown', function(e){
+    if(e.key==='Escape'){
+      var ov=document.getElementById('receipt-overlay');
+      if(ov && ov.classList.contains('open')) closeReceipt();
+    }
+  });
+})();
+
+// Provenance-aware stat card: clickable receipt when provenance exists, plain card otherwise.
+function statCardP(d, src, idx, figkey, lbl, val, sub, accent, valCls){
+  if(typeof _hasProv!=='function' || !_hasProv(d, figkey)){
+    return statCard(lbl, val, sub, accent, valCls);
+  }
+  var fold=_provFold(_provEntries(d, figkey));
+  var flag;
+  if(fold && fold.cls==='ESTIMATED') flag='<span class="prov-flag est" title="Estimated (E)">E</span>';
+  else if(fold && fold.needsReview) flag='<span class="prov-flag rev" title="Needs review">◈</span>';
+  else flag='<span class="prov-flag ok" title="Evidence receipt">◈</span>';
+  return '<div class="mcard '+accent+' prov-card" onclick="showReceipt(\''+figkey+'\',\''+src+'\','+idx+')" title="Click for evidence receipt">'+
+         '<div class="ml">'+lbl+' '+flag+'</div>'+
+         '<div class="mv '+valCls+'">'+val+'</div>'+
+         '<div class="msub">'+sub+'</div></div>';
 }
 </script>
 </body></html>
