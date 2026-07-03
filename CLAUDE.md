@@ -145,6 +145,8 @@ DB; the raw token lives only in the emailed link. Migrations chain `001 → 005`
 - **Git workflow:** prefer feature branch → PR → merge → auto-deploy. Direct
   push to `main` only when multi-account GitHub complexity makes PRs
   impractical. Always commit frontend changes (portal is manual-deploy).
+- **Roadmap hygiene:** every session must update `docs/ROADMAP.md` checkboxes
+  and the "Last updated" line before its final commit.
 
 ---
 

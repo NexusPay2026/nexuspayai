@@ -4,8 +4,8 @@
 > travels with the code and is visible to any collaborator or Claude Code
 > session. Update it as phases complete.
 
-**Last updated:** 2026-06-22 (later session — password reset shipped)
-**Current main commit:** `97287a9` (password reset deployed; backend `a687b50`)
+**Last updated:** 2026-07-01 (Phase 2 — provenance receipt UI built)
+**Current main commit:** backend `261c1b0` (fee-accuracy corrections live). Portal provenance **receipt UI** on branch `feat/provenance-receipt-ui` — pending PR merge + **manual** Netlify deploy (portal is not git-connected; merging main does NOT auto-deploy the portal).
 **Production status at last update:** healthy — all 4 AI providers live, R2 configured, login working, Phase 0 security hardening DEPLOYED, email verification DEPLOYED, password reset DEPLOYED (all via Resend). **Phase 0 is now fully closed.** `/health` exposes the live git commit.
 
 ---
@@ -49,9 +49,14 @@ The full auth surface is now real and backend-backed:
 - Forced password change (admin-seeded accounts)
 - Admin reset-user-password (separate feature, intact)
 
-**Next up → Phase 2 — the Provenance Engine**, the differentiator, whose
-per-provider foundation is already in `main`. Estimated 4–6 focused sessions
-(see Phase 2 section for the breakdown).
+**Phase 2 — the Provenance Engine** is underway. Backend foundation (Steps 1–2:
+prompt v2 emitting page+quote per figure, per-provider retention in
+`provider_results`) is in `main`, and the **one-click receipt UI** (Phase 2
+item 2) is now built on the portal (branch `feat/provenance-receipt-ui`).
+Remaining Phase 2 backend work: consensus-level provenance + arithmetic
+reconciliation / NEEDS-REVIEW gating (Step 3), quality-gated caching, and
+exposing `provider_results` on the merchants read path so stored merchants
+(not just this-session audits) get receipts too.
 
 **Cosmetic / cleanup pending (none blocking):**
 - Stale red banner "Enter the 6-digit reset code shown above" flashes on the
@@ -163,7 +168,7 @@ Built on top of the per-provider foundation already in `main`.
 - [ ] Extraction schema v2: every figure carries **source page + verbatim quote**
 - [ ] Persist per-provider readings instead of discarding them after consensus
 - [ ] Provenance data shape per field: `value`, `class` (EXTRACTED / DERIVED / ESTIMATED), `sources`, `checks`, `confidence band`
-- [ ] One-click **receipt UI** on the portal (click any figure → see its evidence)
+- [x] One-click **receipt UI** on the portal (click any figure → see its evidence) — shipped 2026-07-01. Every provenance-bearing figure on the **audit-results view** and the **merchant-detail modal** is clickable → compact evidence popover: class badge (EXTRACTED/DERIVED/ESTIMATED), source page + verbatim quote (rendered via `textContent`, untrusted-safe), confidence band, per-provider readings side-by-side with disagreement highlighting, and a NEEDS-REVIEW banner when ESTIMATED / low-confidence / providers disagree. Figures with no provenance degrade gracefully (no click). **Backend gap (documented, out of scope for this frontend task):** provenance is only in the live `/api/audit/run` response; `/api/merchants` (`MerchantResponse`) does NOT serialize `provider_results`, so receipts appear on the audit view and on merchants audited *this session*. Surfacing receipts for previously-stored merchants needs a backend change (add `provider_results`/provenance to the merchants read path).
 - [ ] Quality-gated caching + engine versioning + audit-log supersession (self-healing cache: defective extractions never become the cached authority; stale results re-run on next touch)
 - [ ] Entity-level dedup with tolerance band (treat as duplicate unless figures differ beyond threshold)
 - [ ] Arithmetic reconciliation pass + prominent NEEDS-REVIEW gating
