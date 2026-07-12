@@ -147,6 +147,11 @@ DB; the raw token lives only in the emailed link. Migrations chain `001 → 005`
   impractical. Always commit frontend changes (portal is manual-deploy).
 - **Roadmap hygiene:** every session must update `docs/ROADMAP.md` checkboxes
   and the "Last updated" line before its final commit.
+- **CI is green or it doesn't merge:** all future PRs must keep CI green
+  (`.github/workflows/ci.yml` — pytest on sqlite + Postgres, plus pip-audit).
+  New endpoints require at least one smoke test in `tests/` (see `tests/README.md`).
+  Run `pytest` locally before pushing; never modify application logic just to make
+  a test pass — if a test surfaces a real bug, fix the bug or report it in the PR.
 
 ---
 

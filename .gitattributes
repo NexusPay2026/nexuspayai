@@ -1,0 +1,6 @@
+# CI workflow shell scripts (run: blocks, heredocs) must be LF so bash on the
+# Linux runner parses them correctly. The rest of the repo keeps its existing
+# line endings (Windows working copies) — Python on Render handles CRLF fine.
+*.yml text eol=lf
+*.yaml text eol=lf
+/.github/** text eol=lf

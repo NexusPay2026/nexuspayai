@@ -4,7 +4,7 @@
 > travels with the code and is visible to any collaborator or Claude Code
 > session. Update it as phases complete.
 
-**Last updated:** 2026-07-12 (Compliance citation fix — § 5-2-212 corrected, HB25-1090 card added)
+**Last updated:** 2026-07-12 (First test suite + CI — pytest smoke tests on auth + audit paths, GitHub Actions, pip-audit, dependency bumps)
 **Current main commit:** backend `c8b8a02` (provenance receipt UI merged). Portal compliance citation fix on branch `fix/compliance-citations-5-2-212` — pending PR merge + **manual** Netlify deploy (portal is not git-connected; merging main does NOT auto-deploy the portal).
 **Production status at last update:** healthy — all 4 AI providers live, R2 configured, login working, Phase 0 security hardening DEPLOYED, email verification DEPLOYED, password reset DEPLOYED (all via Resend). **Phase 0 is now fully closed.** `/health` exposes the live git commit.
 
@@ -220,8 +220,8 @@ a merchant can act on immediately.
 
 - [x] Compliance citation fix — § 5-2-212 corrected, HB25-1090 card added (portal Compliance Center: replaced the wrong "HB24-1122 / NEW 2026" surcharge citation with C.R.S. § 5-2-212 (SB21-091, eff. July 1 2022) and added the actual 2026 law, HB25-1090 / C.R.S. § 6-1-737 pricing transparency; ticker, state matrix, program cards, PDF strings, and disclaimer all updated)
 - [ ] Real password reset + email verification (covered partly in Phase 0)
-- [ ] Smoke tests on auth + audit paths (there are currently **no tests / no CI** — the quiet risk for a payments product)
-- [ ] `pip-audit` on dependencies; bump `python-multipart`; dedupe `pypdf`
+- [x] Smoke tests on auth + audit paths — first `tests/` suite (pytest + httpx AsyncClient), aiosqlite in-memory locally + Postgres service container in CI; auth surface (login/lockout/verify/register/RBAC/reset) + audit-log path. GitHub Actions CI on PR + push to main.
+- [x] `pip-audit` on dependencies (CI, fail-on-CRITICAL); bump `python-multipart` (0.0.9 → 0.0.18, CVE-2024-53981); dedupe `pypdf` (double pin removed)
 
 ---
 
