@@ -24,6 +24,7 @@ Safety
   providers and R2 are never reached by the tested endpoints. No network.
 """
 
+import importlib.util
 import os
 import pathlib
 import tempfile
@@ -38,14 +39,27 @@ os.environ.setdefault("ADMIN_SEED_PASSWORD", "seed-admin-pw-test")
 # the lockout test drives the per-account path explicitly.
 os.environ.setdefault("LOGIN_RATE_PER_IP_PER_MIN", "1000")
 
-# The import-time engine in app.database is created with pool_size/max_overflow,
-# which the sqlite StaticPool used for ":memory:" rejects — so the *placeholder*
-# app-engine URL must be a FILE sqlite URL. It is never connected (get_db is
-# overridden, lifespan is not run), so no file is ever created.
-_APP_ENGINE_PLACEHOLDER = (
-    pathlib.Path(tempfile.gettempdir()) / "nexuspay_test_appengine_placeholder.db"
-)
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_APP_ENGINE_PLACEHOLDER.as_posix()}"
+# app.database builds an engine AT IMPORT with pool_size/max_overflow. That
+# engine is a throwaway here — it is never connected (get_db is overridden and
+# the lifespan is not run) — but it must *construct*, and the pool_size kwargs
+# constrain which URL works:
+#   * A Postgres URL only constructs if its driver (asyncpg) is importable, but
+#     then it uses QueuePool, which accepts pool_size (no server contact —
+#     construction is lazy).
+#   * A sqlite URL needs no driver install, but depending on the SQLAlchemy
+#     version its pool (NullPool/StaticPool) REJECTS pool_size.
+# So: use a Postgres placeholder when asyncpg is available (CI + Render), else a
+# file-sqlite placeholder (local dev without asyncpg). Either way it is a
+# throwaway that never connects.
+if importlib.util.find_spec("asyncpg") is not None:
+    os.environ["DATABASE_URL"] = (
+        "postgresql+asyncpg://placeholder:placeholder@127.0.0.1:5432/nexuspay_test_placeholder"
+    )
+else:
+    _APP_ENGINE_PLACEHOLDER = (
+        pathlib.Path(tempfile.gettempdir()) / "nexuspay_test_appengine_placeholder.db"
+    )
+    os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_APP_ENGINE_PLACEHOLDER.as_posix()}"
 
 # The database the tests actually read/write. Default: in-memory sqlite.
 # CI sets TEST_DATABASE_URL to the Postgres service container. Note the `or`:
