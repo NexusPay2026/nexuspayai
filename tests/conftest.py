@@ -48,8 +48,11 @@ _APP_ENGINE_PLACEHOLDER = (
 os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_APP_ENGINE_PLACEHOLDER.as_posix()}"
 
 # The database the tests actually read/write. Default: in-memory sqlite.
-# CI sets TEST_DATABASE_URL to the Postgres service container.
-RUN_DB_URL = os.environ.get("TEST_DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+# CI sets TEST_DATABASE_URL to the Postgres service container. Note the `or`:
+# an env var that is SET BUT EMPTY (e.g. the sqlite CI leg exports
+# TEST_DATABASE_URL="") must still fall back to the sqlite default — `.get(k, d)`
+# would return "" in that case.
+RUN_DB_URL = os.environ.get("TEST_DATABASE_URL") or "sqlite+aiosqlite:///:memory:"
 
 
 def _assert_test_db(url: str) -> None:
