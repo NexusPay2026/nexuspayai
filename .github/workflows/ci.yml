@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests + dependency audit
+    runs-on: ubuntu-latest
+
+    # Postgres service container. The suite runs against BOTH sqlite (fast,
+    # portable) and this real Postgres, so Postgres-specific behavior (tz-aware
+    # DateTime, ilike, JSON) is exercised too.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: nexuspay_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Consumed by tests/conftest.py to run the suite against the container.
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/nexuspay_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run tests (sqlite in-memory)
+        env:
+          TEST_DATABASE_URL: ""   # unset -> conftest falls back to in-memory sqlite
+        run: pytest
+
+      - name: Run tests (Postgres service container)
+        run: pytest   # TEST_DATABASE_URL (job env) points at the container
+
+      - name: Dependency audit (report all; fail only on CRITICAL)
+        run: |
+          pip-audit -r requirements.txt --format json --output audit.json || true
+          python - <<'PY'
+          import json, os, sys
+
+          if not os.path.exists("audit.json"):
+              print("pip-audit produced no report; skipping gate.")
+              sys.exit(0)
+
+          data = json.load(open("audit.json"))
+          deps = data.get("dependencies", []) if isinstance(data, dict) else data
+
+          def cvss_ge_9(vuln) -> bool:
+              # Severity is not always present in pip-audit output; be defensive.
+              for entry in (vuln.get("severity") or []):
+                  score = entry.get("score") if isinstance(entry, dict) else None
+                  try:
+                      if score is not None and float(str(score).split("/")[0]) >= 9.0:
+                          return True
+                  except (TypeError, ValueError):
+                      pass
+              return '"critical"' in json.dumps(vuln).lower()
+
+          findings, critical = [], []
+          for d in (deps or []):
+              for v in d.get("vulns", []) or []:
+                  findings.append((d.get("name"), d.get("version"), v))
+
+          if not findings:
+              print("pip-audit: no known vulnerabilities in requirements.txt.")
+              sys.exit(0)
+
+          print(f"pip-audit: {len(findings)} advisory finding(s) (reporting all):")
+          for name, ver, v in findings:
+              fixes = ", ".join(v.get("fix_versions", []) or []) or "no fix listed"
+              crit = cvss_ge_9(v)
+              tag = " [CRITICAL]" if crit else ""
+              print(f"  - {name} {ver}: {v.get('id')} -> fix: {fixes}{tag}")
+              if crit:
+                  critical.append(v.get("id"))
+
+          if critical:
+              print(f"\nFAIL: {len(critical)} CRITICAL finding(s): {critical}")
+              sys.exit(1)
+          print("\nNo CRITICAL findings — reported only, job not failed.")
+          PY

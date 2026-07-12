@@ -6,7 +6,7 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 pydantic[email]==2.9.2
-python-multipart==0.0.9
+python-multipart==0.0.18  # bumped from 0.0.9 — CVE-2024-53981 (multipart DoS)
 
 # ── Database (Postgres only) ─────────────────────────────────
 sqlalchemy[asyncio]==2.0.35
@@ -26,7 +26,6 @@ python-dotenv==1.0.1
 
 reportlab>=4.0
 
-pypdf==4.3.1
 pypdf==4.3.1
 
 # ── Statement page rendering (multi-page extraction: rasterize scanned PDFs, downscale images) ──
