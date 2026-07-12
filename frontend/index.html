@@ -997,7 +997,7 @@ html,body{height:100%;overflow:hidden;background:var(--void);color:var(--t1);fon
       <!-- ════ VIEW: COMPLIANCE ════ -->
       <div class="view" id="v-compliance">
         <div class="vhdr">
-          <div class="vh-left"><span style="font-size:16px">⚖</span><div><div class="vh-title">Compliance Center</div><div class="vh-sub">Colorado HB24-1122 · state surcharge laws · card brand rules · Dodd-Frank</div></div></div>
+          <div class="vh-left"><span style="font-size:16px">⚖</span><div><div class="vh-title">Compliance Center</div><div class="vh-sub">Colorado surcharge &amp; pricing law · state surcharge laws · card brand rules · Dodd-Frank</div></div></div>
           <div class="vh-right"><div class="vh-crumb">NexusPay / <span>Compliance</span></div><span class="bdg bdg-gold"><span class="bdg-dot"></span>CO 2026 ACTIVE</span></div>
         </div>
         <div class="vscroll"><div class="vpad" id="compliance-body"></div></div>
@@ -1077,7 +1077,7 @@ html,body{height:100%;overflow:hidden;background:var(--void);color:var(--t1);fon
     <div class="sb-seg">MERCHANTS: <span class="sb-seg-val" id="sb-merch-status">0</span></div>
     <div class="sb-seg">USER: <span class="sb-seg-val" id="sb-user-status">—</span></div>
     <div class="sb-seg">LAST AUDIT: <span class="sb-seg-val" id="sb-last-audit">—</span></div>
-    <div class="sb-seg">CO SURCHARGE CAP: <span class="sb-seg-val" style="color:var(--gold)">2% (HB24-1122 · 2026)</span></div>
+    <div class="sb-seg">CO SURCHARGE CAP: <span class="sb-seg-val" style="color:var(--gold)">2% (C.R.S. § 5-2-212)</span></div>
     <div class="sb-right">
       <div class="sb-seg" style="cursor:pointer" onclick="showLegalModal('terms')"><span style="color:var(--t4);border-bottom:1px solid var(--b1)">Legal</span></div>
       <div class="sb-seg" style="cursor:pointer" onclick="showLegalModal('privacy')"><span style="color:var(--t4);border-bottom:1px solid var(--b1)">Privacy</span></div>
@@ -2494,7 +2494,7 @@ var IC_TABLE = [
 var STATES = [
   {s:'AL',st:'ok',law:'Allowed'},{s:'AK',st:'ok',law:'Allowed — no restriction'},
   {s:'AZ',st:'ok',law:'Allowed'},{s:'AR',st:'ok',law:'Allowed'},
-  {s:'CA',st:'ok',law:'Allowed (post-2022 Visa/MC settlement)'},{s:'CO',st:'co-new',law:'HB24-1122: 2% cap or actual cost (eff. Jan 1 2026)'},
+  {s:'CA',st:'ok',law:'Allowed (post-2022 Visa/MC settlement)'},{s:'CO',st:'co-new',law:'SB21-091 / C.R.S. § 5-2-212: 2% cap or actual cost (eff. July 1, 2022)'},
   {s:'CT',st:'ok',law:'Allowed'},{s:'DE',st:'ok',law:'Allowed'},
   {s:'FL',st:'ok',law:'Allowed'},{s:'GA',st:'ok',law:'Allowed'},
   {s:'HI',st:'ok',law:'Allowed'},{s:'ID',st:'ok',law:'Allowed'},
@@ -4491,7 +4491,7 @@ function renderProgCards(d, p) {
         c.rows.map(function(r){ return '<div class="pc-row"><span class="pc-rlbl">'+r[0]+'</span><span class="pc-rval '+r[2]+'">'+r[1]+'</span></div>'; }).join('') +
         '<div class="pc-div"></div>' +
         '<div class="pc-note">' + c.note + '</div>' +
-        (c.coWarn ? '<div class="pc-alert">⚠ Colorado HB24-1122 (Jan 2026): Surcharge ≤ 2% OR actual cost. Debit surcharges federally prohibited.</div>' : '') +
+        (c.coWarn ? '<div class="pc-alert">⚠ Colorado C.R.S. § 5-2-212: Surcharge ≤ 2% OR actual cost. Surcharges prohibited on debit, cash, check, and gift-card payments under C.R.S. § 5-2-212 and card network rules.</div>' : '') +
       '</div>' +
     '</div>';
   }).join('');
@@ -4521,22 +4521,22 @@ function renderWhySection(d) {
       'Higher customer acceptance than traditional surcharge',
     ], true],
     ['Surcharge ✕', 'var(--dn)', [
-      'Colorado 2026: Max 2% OR actual cost — lower of two',
-      'Debit surcharges federally prohibited (Dodd-Frank)',
+      'Colorado C.R.S. § 5-2-212: Max 2% OR actual cost — lower of two',
+      'Surcharges prohibited on debit, cash, check & gift cards',
       'Must register with Visa/MC before implementing',
       'Surcharge must show on every receipt as line item',
       'Cannot surcharge Amex in most agreements',
       'Only offsets credit — debit and cash still cost you',
       'Subject to continued regulatory tightening',
     ], false],
-    ['Colorado HB24-1122 ⚖', 'var(--gold)', [
-      'Effective January 1, 2026',
-      'Cap: 2% OR your actual processing cost (lower wins)',
-      'Previous limit was 3% per Visa/MC card brand rules',
-      'Debit surcharges still PROHIBITED federally',
-      'Must disclose at POS and on customer receipts',
-      'Cannot exceed net fee actually paid to processor',
-      'Cash Discounting & Dual Pricing: fully EXEMPT',
+    ['Colorado C.R.S. § 5-2-212 ⚖', 'var(--gold)', [
+      'Enacted by SB21-091; effective July 1, 2022',
+      'Cap: 2% OR your actual merchant discount fee (you elect)',
+      'Surcharges prohibited on debit, cash, check & gift cards',
+      'Statutory disclosure notice required at premises/online',
+      'Surcharge must appear as a separate receipt line item',
+      'Violations enforced under the Uniform Consumer Credit Code',
+      'Cash Discounting & Dual Pricing: not surcharges, EXEMPT',
     ], null],
   ];
 
@@ -4642,9 +4642,10 @@ async function renderCommandCenter() {
     el.innerHTML =
       (isDemoUser() ? pciNotice() : '') +
       '<div class="co-banner"><div class="co-icon">⚖️</div><div>' +
-        '<div class="co-title">Colorado HB24-1122 Active <span class="co-badge">NEW 2026</span></div>' +
-        '<div class="co-body">Surcharge cap: <strong>2% or actual merchant cost</strong> — whichever is lower. ' +
-        'Cash Discounting and Dual Pricing are exempt. <a href="#" onclick="nav(\'compliance\')" style="color:var(--gold)">Full guide →</a></div>' +
+        '<div class="co-title">Colorado Surcharge Law — C.R.S. § 5-2-212 <span class="co-badge">ACTIVE</span></div>' +
+        '<div class="co-body">Surcharge cap: <strong>2% or your actual merchant discount fee</strong> — whichever you elect. ' +
+        'Cash Discounting and Dual Pricing are exempt. New for 2026: pricing-transparency law <strong>HB25-1090 / C.R.S. § 6-1-737</strong>. ' +
+        '<a href="#" onclick="nav(\'compliance\')" style="color:var(--gold)">Full guide →</a></div>' +
       '</div></div>' +
       '<div class="empty-state"><span class="es-icon">⬛</span>No audits yet<br>' +
       '<button class="btn lime" style="margin-top:10px" onclick="loadDemoData()">◈ Load Demo Data</button>&nbsp;' +
@@ -4662,8 +4663,8 @@ async function renderCommandCenter() {
   el.innerHTML =
     (isDemoUser() ? pciNotice() : '') +
     '<div class="co-banner"><div class="co-icon">⚖️</div><div>' +
-      '<div class="co-title">Colorado HB24-1122 Active <span class="co-badge">NEW 2026</span></div>' +
-      '<div class="co-body">Surcharge cap: <strong>2% or actual merchant cost</strong>. Cash Discounting &amp; Dual Pricing are exempt. ' +
+      '<div class="co-title">Colorado Surcharge Law — C.R.S. § 5-2-212 <span class="co-badge">ACTIVE</span></div>' +
+      '<div class="co-body">Surcharge cap: <strong>2% or your actual merchant discount fee</strong>. Cash Discounting &amp; Dual Pricing are exempt. New for 2026: pricing-transparency law <strong>HB25-1090 / C.R.S. § 6-1-737</strong>. ' +
       '<a href="#" onclick="nav(\'compliance\')" style="color:var(--gold)">Full compliance guide →</a></div>' +
     '</div></div>' +
     '<div class="metric-grid cols-5">' +
@@ -4737,8 +4738,8 @@ function renderProgramsView() {
   var p = calcPrograms(d);
   el.innerHTML =
     '<div class="co-banner"><div class="co-icon">⚖️</div><div>' +
-      '<div class="co-title">Colorado HB24-1122 <span class="co-badge">ACTIVE 2026</span></div>' +
-      '<div class="co-body">Surcharge cap: <strong>2% or actual cost</strong>. Debit surcharges <strong>prohibited</strong>. Cash Discounting &amp; Dual Pricing are exempt.</div>' +
+      '<div class="co-title">Colorado Surcharge Law — C.R.S. § 5-2-212 <span class="co-badge">ACTIVE</span></div>' +
+      '<div class="co-body">Surcharge cap: <strong>2% or actual cost</strong>. Surcharges <strong>prohibited on debit, cash, check &amp; gift cards</strong>. Cash Discounting &amp; Dual Pricing are exempt.</div>' +
     '</div></div>' +
     '<div class="prog-grid">' + renderProgCards(d,p) + '</div>' +
     '<div class="split-2" style="margin-top:10px">' +
@@ -4904,22 +4905,38 @@ function buildComplianceView() {
         '<a href="tel:7206897272" class="btn sm ghost" style="text-decoration:none;text-align:center;font-size:10px">📞 (720) 689-7272</a>' +
       '</div>' +
     '</div>' +
-    '<div class="co-banner" style="border-color:rgba(208,160,32,.4)">' +
-      '<div class="co-icon">⚖️</div>' +
-      '<div style="flex:1">' +
-        '<div class="co-title">Colorado HB24-1122 — Credit Card Surcharge Cap <span class="co-badge">EFFECTIVE JAN 1, 2026</span></div>' +
-        '<div class="co-body">' +
-          '• Surcharges capped at <strong>2.00%</strong> or your actual processing cost — <strong>whichever is lower</strong><br>' +
-          '• Previous limit: 3.00% per Visa/Mastercard card brand rules<br>' +
-          '• Debit card surcharges remain <strong>prohibited</strong> under Dodd-Frank (federal, all states)<br>' +
-          '• Must disclose surcharge at point of sale AND on customer receipts<br>' +
-          '• Surcharge cannot exceed the net fee actually paid to the processor<br>' +
-          '• Must register surcharge program with card brands before implementing<br>' +
-          '• Enforcement: Colorado Attorney General civil enforcement<br>' +
-          '• <strong>Cash Discounting and Dual Pricing are NOT surcharges</strong> — fully legal, no caps apply' +
+    '<div class="split-2">' +
+      '<div class="co-banner" style="border-color:rgba(208,160,32,.4)">' +
+        '<div class="co-icon">⚖️</div>' +
+        '<div style="flex:1">' +
+          '<div class="co-title">Colorado Surcharge Law — C.R.S. § 5-2-212 (SB21-091) <span class="co-badge">ACTIVE</span></div>' +
+          '<div class="co-body">' +
+            '• Effective <strong>July 1, 2022</strong> (Credit Transaction Charge Limitations) — not new<br>' +
+            '• Merchant may surcharge credit up to <strong>2%</strong> of the total <strong>OR</strong> the actual merchant discount fee — whichever they elect<br>' +
+            '• Surcharges <strong>prohibited</strong> on debit, cash, check, and gift-card payments<br>' +
+            '• Mandatory disclosure using the statutory notice text at the premises and online<br>' +
+            '• Surcharge must appear as a <strong>separate line item</strong> on the receipt<br>' +
+            '• Violations enforced under the <strong>Uniform Consumer Credit Code</strong><br>' +
+            '• <strong>Cash Discounting and Dual Pricing are NOT surcharges</strong> — no cap applies' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="co-banner" style="border-color:rgba(120,96,224,.4)">' +
+        '<div class="co-icon">🏷️</div>' +
+        '<div style="flex:1">' +
+          '<div class="co-title">Colorado Pricing Transparency — HB25-1090 / C.R.S. § 6-1-737 <span class="co-badge" style="background:rgba(120,96,224,.18);color:var(--purple);border-color:rgba(120,96,224,.5)">NEW 2026</span></div>' +
+          '<div class="co-body">' +
+            '• Effective <strong>January 1, 2026</strong> (applies to conduct on/after that date; not retroactive)<br>' +
+            '• Must disclose the <strong>maximum total price</strong> — all mandatory fees — as a <strong>single number</strong>, shown more prominently than any other price. Bans drip pricing / junk fees<br>' +
+            '• Part of the Colorado Consumer Protection Act; violations are deceptive trade practices<br>' +
+            '• <strong>Private right of action</strong> — 14-day written demand, then suit for all illegally charged fees, actual damages, attorney\x27s fees, and <strong>18% annual interest</strong> (compounded); AG enforcement + rulemaking expected in 2026<br>' +
+            '• <strong>Evolving guidance:</strong> a card surcharge is generally avoidable (pay cash/debit), so under the "reasonably avoidable" test it is arguably not a mandatory fee that must be baked into the advertised total — but AG rulemaking is pending<br>' +
+            '• Merchants running surcharge or dual-pricing programs should structure displayed pricing to satisfy <strong>both</strong> § 5-2-212 and § 6-1-737' +
+          '</div>' +
         '</div>' +
       '</div>' +
     '</div>' +
+    '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);margin:6px 2px 12px">Not legal advice — informational only; consult counsel.</div>' +
     '<div class="split-2">' +
       '<div class="panel">' +
         '<div class="ph"><div class="ph-title">U.S. Surcharge Status by State</div><div class="ph-sub">Click any state for law details</div></div>' +
@@ -4927,7 +4944,7 @@ function buildComplianceView() {
           '<div class="state-legend">' +
             '<div class="sl-item"><div class="sl-dot" style="background:rgba(32,192,96,.5)"></div>Allowed</div>' +
             '<div class="sl-item"><div class="sl-dot" style="background:rgba(224,64,80,.5)"></div>Prohibited</div>' +
-            '<div class="sl-item"><div class="sl-dot" style="background:var(--gold);border:1px solid var(--gold)"></div>CO — 2% Cap 2026</div>' +
+            '<div class="sl-item"><div class="sl-dot" style="background:var(--gold);border:1px solid var(--gold)"></div>CO — 2% surcharge cap</div>' +
           '</div>' +
           '<div class="state-grid">' + stateHTML + '</div>' +
           '<div style="font-family:var(--mono);font-size:9px;color:var(--t3);margin-top:8px">* MA prohibits under MGL c.140D §28A</div>' +
@@ -4959,7 +4976,7 @@ function buildComplianceView() {
     '</div>' +
     // ── KEY COLORADO & CARD BRAND LEGISLATION ──
     '<div class="panel" style="margin-top:14px;border-color:rgba(208,160,32,.2)">' +
-      '<div class="ph" style="background:rgba(208,160,32,.03)"><div class="ph-title" style="color:var(--gold)">⚖️ Key Colorado Legislation & Card Brand Laws</div><div class="ph-sub">2024–2026 Session · Impact on Merchant Processing</div></div>' +
+      '<div class="ph" style="background:rgba(208,160,32,.03)"><div class="ph-title" style="color:var(--gold)">⚖️ Key Colorado Legislation & Card Brand Laws</div><div class="ph-sub">2021–2026 Sessions · Impact on Merchant Processing</div></div>' +
       '<div class="pb" style="padding:14px">' +
         // SB 26-134
         '<div style="padding:12px;background:var(--s2);border:1px solid var(--b1);border-radius:4px;margin-bottom:10px;border-left:3px solid var(--gold)">' +
@@ -4985,12 +5002,20 @@ function buildComplianceView() {
             '<strong style="color:var(--t1)">Impact:</strong> If your business is in the firearms industry, verify your MCC is correctly assigned. Incorrect MCC coding can lead to higher interchange rates.' +
           '</div>' +
         '</div>' +
-        // HB 24-1122
-        '<div style="padding:12px;background:var(--s2);border:1px solid var(--b1);border-radius:4px;border-left:3px solid var(--warn)">' +
-          '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px"><span class="co-badge">ACTIVE</span><span style="font-size:12px;font-weight:700;color:var(--warn)">HB 24-1122 — Credit Card Surcharge Cap</span></div>' +
+        // SB21-091 / C.R.S. § 5-2-212
+        '<div style="padding:12px;background:var(--s2);border:1px solid var(--b1);border-radius:4px;margin-bottom:10px;border-left:3px solid var(--warn)">' +
+          '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px"><span class="co-badge">ACTIVE</span><span style="font-size:12px;font-weight:700;color:var(--warn)">SB21-091 / C.R.S. § 5-2-212 — Credit Card Surcharge Cap</span></div>' +
           '<div style="font-family:var(--mono);font-size:10px;color:var(--t2);line-height:1.8">' +
-            'Effective <strong style="color:var(--lime)">January 1, 2026</strong>. Caps surcharges at 2% or actual processing cost (whichever is lower). Debit surcharges remain federally prohibited.<br>' +
+            'Effective <strong style="color:var(--lime)">July 1, 2022</strong>. Merchants may surcharge credit up to 2% of the total or their actual merchant discount fee (whichever they elect). Surcharges prohibited on debit, cash, check, and gift-card payments. Statutory disclosure + separate receipt line item required; violations enforced under the Uniform Consumer Credit Code.<br>' +
             '<strong style="color:var(--t1)">Bottom line:</strong> Cash Discounting and Dual Pricing are NOT surcharges and are fully exempt. NexusPay recommends these programs for maximum savings with zero compliance risk.' +
+          '</div>' +
+        '</div>' +
+        // HB25-1090 / C.R.S. § 6-1-737
+        '<div style="padding:12px;background:var(--s2);border:1px solid var(--b1);border-radius:4px;border-left:3px solid var(--purple)">' +
+          '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px"><span class="bdg bdg-purple">NEW 2026</span><span style="font-size:12px;font-weight:700;color:var(--purple)">HB25-1090 / C.R.S. § 6-1-737 — Pricing Transparency (Deceptive Pricing)</span></div>' +
+          '<div style="font-family:var(--mono);font-size:10px;color:var(--t2);line-height:1.8">' +
+            'Effective <strong style="color:var(--lime)">January 1, 2026</strong> (not retroactive). Unlawful to advertise or display pricing without clearly disclosing the <strong style="color:var(--t1)">maximum total price</strong> — all mandatory fees — as a single number shown more prominently than any other price. Bans drip pricing / junk fees. Part of the Colorado Consumer Protection Act: consumers get a private right of action (14-day demand, then suit for all illegally charged fees, actual damages, attorney fees, and 18% annual interest, compounded); AG enforcement + rulemaking expected in 2026.<br>' +
+            '<strong style="color:var(--t1)">Surcharge interaction (evolving guidance):</strong> a card surcharge is generally avoidable, so under the "reasonably avoidable" test it is arguably not a mandatory fee that must be baked into the advertised total — but disclosure standards still apply and AG rulemaking is pending. Surcharge/dual-pricing merchants should structure displayed pricing to satisfy both § 5-2-212 and § 6-1-737.' +
           '</div>' +
         '</div>' +
       '</div>' +
@@ -5101,7 +5126,7 @@ function generateAlerts(d) {
     na.push({title:'PCI fee above benchmark — '+dn,sub:fmtD(d.pci_fee)+'/mo exceeds $9.95 standard',sev:'m',amount:(d.pci_fee-9.95)*12,type:'save',ts:Date.now(),_isDemo:isDemo});
   if (d.statement_fee && d.statement_fee>0)
     na.push({title:'Waivable statement fee — '+dn,sub:fmtD(d.statement_fee)+'/mo — often reduced to $0 at renewal',sev:'l',amount:d.statement_fee*12,type:'save',ts:Date.now(),_isDemo:isDemo});
-  na.push({title:'Colorado Compliance — '+dn,sub:'Verify surcharge program compliant with HB24-1122 (2% cap, Jan 2026)',sev:'m',amount:null,type:'compliance',ts:Date.now(),_isDemo:isDemo});
+  na.push({title:'Colorado Compliance — '+dn,sub:'Verify surcharge program compliant with C.R.S. § 5-2-212 (2% cap or actual cost)',sev:'m',amount:null,type:'compliance',ts:Date.now(),_isDemo:isDemo});
   alerts = na.concat(alerts).slice(0,50);
   var cnt = alerts.filter(function(a){return a.sev==='h';}).length;
   ['alert-count','sb-alert-cnt','alert-tab-badge'].forEach(function(id) {
@@ -5155,7 +5180,7 @@ function renderReportsView() {
     '<div class="metric-grid cols-3" style="margin-bottom:12px">' +
       statCard('Reports Available',_vp.length,'forensic audits','c-lime','lime') +
       statCard('Total Savings Found',fmtK(totSav)+'/yr','all merchants','c-up','up') +
-      statCard('CO Compliance Notices',_vp.length,'HB24-1122 checks','c-gold','gold') +
+      statCard('CO Compliance Notices',_vp.length,'§ 5-2-212 checks','c-gold','gold') +
     '</div>' +
     '<div class="panel"><div class="ph"><div class="ph-title">Report Library</div><div class="ph-sub">Full PDF · findings · program comparison · CO notice</div></div>' +
     '<div class="pb" style="padding:12px">' +
@@ -5260,7 +5285,7 @@ function buildSettingsView() {
         '<div class="panel"><div class="ph"><div class="ph-title">Platform Information</div></div>' +
           '<div class="pb" style="padding:14px">' +
           [['Platform','NexusPay Intelligence v4.0'],['AI Engine','Claude claude-sonnet-4-20250514'],
-           ['PDF Beta Header','anthropic-beta: pdfs-2024-09-25'],['Compliance','Colorado HB24-1122 (Jan 2026)'],
+           ['PDF Beta Header','anthropic-beta: pdfs-2024-09-25'],['Compliance','Colorado C.R.S. § 5-2-212 · § 6-1-737'],
            ['Interchange Data','Visa/MC/Amex/Disc Q1 2026'],['Programs','IC+ · Surcharge · Dual Pricing · Cash Disc.'],
            ['PDF Engine','jsPDF 2.5.1'],['Storage','localStorage (browser only)']].map(function(r) {
             return '<div class="calc-row"><span class="calc-lbl">'+r[0]+'</span><span class="calc-val" style="font-size:10px;font-family:var(--mono)">'+r[1]+'</span></div>';
@@ -5944,7 +5969,7 @@ var LEGAL_CONTENT = {
       '<strong>ACCURACY.</strong> While we strive for accuracy in all analysis and benchmarking, NexusPay Intelligence relies on AI extraction which may contain errors. Users should verify all extracted data against original statements before making decisions.<br><br>' +
       '<strong>SAVINGS PROJECTIONS.</strong> All savings estimates, program comparisons, and financial projections are theoretical models based on stated assumptions. Actual results will vary based on processor negotiations, card mix, transaction patterns, and market conditions.<br><br>' +
       '<strong>INTERCHANGE RATES.</strong> Published interchange rates are approximate and subject to change by Visa, Mastercard, Amex, and Discover without notice. Rates shown are for reference only.<br><br>' +
-      '<strong>REGULATORY COMPLIANCE.</strong> Information about Colorado HB24-1122, state surcharge laws, Dodd-Frank Act, and card brand rules is for educational reference. Consult a qualified attorney for compliance guidance specific to your business and jurisdiction.<br><br>' +
+      '<strong>REGULATORY COMPLIANCE.</strong> Information about Colorado C.R.S. § 5-2-212 (surcharge cap) and C.R.S. § 6-1-737 (pricing transparency), state surcharge laws, Dodd-Frank Act, and card brand rules is for educational reference. Consult a qualified attorney for compliance guidance specific to your business and jurisdiction.<br><br>' +
       '<strong>NO WARRANTY.</strong> The platform is provided "AS IS" and "AS AVAILABLE" without warranties of any kind, express or implied, including merchantability, fitness for a particular purpose, or non-infringement.<br><br>' +
       '<strong>LIMITATION OF LIABILITY.</strong> In no event shall NexusPay Services, LLC be liable for any indirect, incidental, special, consequential, or punitive damages arising from your use of the platform.'
   },
@@ -6546,13 +6571,13 @@ function downloadPDF(d) {
     doc.text('Effective rate of '+fmtP(eff)+' vs. industry IC+ benchmark of 1.65%  ·  Risk score: '+(d.risk_score||0)+'/100', PL+8, y+14);
     y+=26;
 
-    // COLORADO HB24-1122 NOTICE
+    // COLORADO C.R.S. § 5-2-212 NOTICE
     setFill([20,14,2]); doc.roundedRect(PL,y,CW,22,2,2,'F');
     setFill(GOLD); doc.roundedRect(PL,y,4,22,0,0,'F');
-    setTxt(GOLD,8,true);  doc.text('⚖  COLORADO HB24-1122 — EFFECTIVE JANUARY 1, 2026', PL+8, y+7);
+    setTxt(GOLD,8,true);  doc.text('⚖  COLORADO C.R.S. § 5-2-212 — CREDIT CARD SURCHARGE CAP (EFF. JULY 1, 2022)', PL+8, y+7);
     setTxt(T2,7,false);
-    doc.text('Credit card surcharges are now capped at 2% OR your actual processing cost — whichever is lower.', PL+8, y+13);
-    doc.text('Debit surcharges remain federally prohibited. Cash Discounting & Dual Pricing are fully exempt from this cap.', PL+8, y+18.5);
+    doc.text('Credit card surcharges are capped at 2% OR your actual merchant discount fee — whichever you elect.', PL+8, y+13);
+    doc.text('Surcharges are prohibited on debit, cash, check & gift cards. Cash Discounting & Dual Pricing are fully exempt.', PL+8, y+18.5);
     y+=27;
 
     footerStrip(1,6);
@@ -6906,7 +6931,7 @@ function downloadPDF(d) {
       // CO warning
       if(pg.coWarn){
         setFill([25,16,4]); doc.roundedRect(PL+8,y+33,CW-12,9,1,1,'F');
-        setTxt(WARN,6.5,true); doc.text('⚠ CO HB24-1122: Surcharge capped at 2% or actual cost (Jan 2026). Debit surcharge prohibited.', PL+11,y+38.5);
+        setTxt(WARN,6.5,true); doc.text('⚠ CO C.R.S. § 5-2-212: Surcharge capped at 2% or actual cost. Debit, cash, check & gift-card surcharges prohibited.', PL+11,y+38.5);
       }
       y+=boxH+5;
 
@@ -7200,7 +7225,7 @@ function generateProposal(d) {
     var whyItems = [
       ['Transparent Pricing', 'No hidden fees. Interchange-plus or cash discount — you see exactly what you pay for every transaction.'],
       ['AI-Powered Monitoring', 'Our NexusPay Intelligence platform monitors your rates 24/7 and alerts you to any changes or overcharges.'],
-      ['Colorado Compliance Built-In', 'HB24-1122 surcharge cap, SB 26-134 interchange rules — we keep you compliant automatically.'],
+      ['Colorado Compliance Built-In', 'C.R.S. § 5-2-212 surcharge cap, § 6-1-737 pricing transparency, SB 26-134 interchange rules — we keep you compliant automatically.'],
       ['Dedicated Account Manager', 'Real person, real phone number, answers when you call. Not a chatbot, not a call center.'],
       ['No Long-Term Contracts', 'Month-to-month. We keep your business by earning it, not by locking you in.'],
       ['Fast Onboarding', 'Most merchants are live within 48 hours. We handle the paperwork.']
