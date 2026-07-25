@@ -19,7 +19,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.config import settings
 from app.database import engine, Base, database
-from app.routers import auth, merchants, users, visitors, audit, health, storage, quotes, pricing_tool, chatbot, statements, exclusions
+from app.routers import auth, merchants, users, visitors, audit, health, storage, quotes, pricing_tool, chatbot, statements, exclusions, cms
 
 logger = logging.getLogger("nexuspay.api")
 
@@ -134,6 +134,16 @@ ALLOWED_ORIGINS = [
 # new production Netlify domains to ALLOWED_ORIGINS explicitly; deploy-preview URLs
 # are intentionally not allowed.
 
+# 7. CMS console (custom admin for the Calcerta site) — its Netlify origin is
+# supplied by env so the URL is not hardcoded before the site exists. Starlette
+# installs ONE global CORSMiddleware, so this is the only way to let the console
+# through. Router-level enforcement in app/routers/cms.py additionally rejects any
+# /api/cms/* request whose Origin is not exactly CMS_CONSOLE_ORIGIN, so the other
+# origins listed above still cannot reach the CMS API.
+_cms_console_origin = (os.getenv("CMS_CONSOLE_ORIGIN", "") or "").strip().rstrip("/")
+if _cms_console_origin and _cms_console_origin not in ALLOWED_ORIGINS:
+    ALLOWED_ORIGINS.append(_cms_console_origin)
+
 # Credentials may only be sent with an explicit origin allowlist. In development
 # we allow all origins for convenience, so credentials MUST be disabled there
 # (browsers reject "*" + credentials, and it would be unsafe regardless).
@@ -173,5 +183,6 @@ app.include_router(storage.router,   prefix="/api",  tags=["Storage / R2"])
 app.include_router(quotes.router,    prefix="/api",  tags=["Pricing Quotes"])
 app.include_router(pricing_tool.router, tags=["Pricing Tool"])
 app.include_router(chatbot.router,   prefix="/api",  tags=["Chatbot"])
+app.include_router(cms.router,       prefix="/api",  tags=["CMS Console"])
 
 
