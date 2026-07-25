@@ -4,7 +4,7 @@
 > travels with the code and is visible to any collaborator or Claude Code
 > session. Update it as phases complete.
 
-**Last updated:** 2026-07-24 (Calcerta chatbot launch prep — added calcerta.com to CORS, reconciled /api/chatbot/message to spec, confidential sponsor-bank prompt kept; follows the first test suite + CI landing on main)
+**Last updated:** 2026-07-24 (CMS console backend — new `/api/cms` router on branch `feat/cms-console-backend`, PR open, NOT merged. Replaces the dropped Sveltia CMS: username/password sign-in against a bcrypt hash, 8h scoped JWT, server-side GitHub token, path allowlist, per-username lockout. Paired console frontend is the separate private repo `NexusPay2026/calcerta-console`. Follows the Calcerta chatbot launch prep — calcerta.com CORS + /api/chatbot/message reconciled to spec)
 **Current main commit:** backend `c8b8a02` (provenance receipt UI merged). Portal compliance citation fix on branch `fix/compliance-citations-5-2-212` — pending PR merge + **manual** Netlify deploy (portal is not git-connected; merging main does NOT auto-deploy the portal).
 **Production status at last update:** healthy — all 4 AI providers live, R2 configured, login working, Phase 0 security hardening DEPLOYED, email verification DEPLOYED, password reset DEPLOYED (all via Resend). **Phase 0 is now fully closed.** `/health` exposes the live git commit.
 
@@ -247,6 +247,8 @@ a merchant can act on immediately.
 | Dashboard (internal) | https://dashboard.nexuspayservices.com | Admin/internal; separate repo |
 | Matrix (admin-only) | https://matrix.nexuspayai.com | Admin-only |
 | Main website | https://nexuspayservices.com | Marketing |
+| Calcerta Group site | https://calcerta.com | Eleventy + Netlify, git-connected to `NexusPay2026/calcerta-site` |
+| CMS console (admin) | *(pending — new Netlify site)* | Custom admin replacing Sveltia; private repo `NexusPay2026/calcerta-console`, backed by `/api/cms` |
 
 Backend (all surfaces): Render — unified FastAPI service.
 

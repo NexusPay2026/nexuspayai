@@ -101,6 +101,7 @@ from app import models  # noqa: E402  (registers all tables on Base.metadata)
 from app.main import app  # noqa: E402
 from app.services.auth_service import hash_password, create_token  # noqa: E402
 from app.routers import auth as auth_router  # noqa: E402
+from app.routers import cms as cms_router  # noqa: E402
 
 _IS_SQLITE = RUN_DB_URL.startswith("sqlite")
 # Public alias for tests that must skip on sqlite. SQLite has no real timezone
@@ -176,6 +177,11 @@ def _reset_process_state(monkeypatch):
     auth_router._login_fail_counts.clear()
     auth_router._login_lockouts.clear()
     auth_router._seeded = False
+
+    # The CMS console keeps its own per-process limiter/lockout state.
+    cms_router._login_ip_buckets.clear()
+    cms_router._login_fail_counts.clear()
+    cms_router._login_lockouts.clear()
 
     async def _fake_send_email(*_args, **_kwargs):
         return True

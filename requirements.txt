@@ -21,6 +21,12 @@ httpx==0.27.2
 # ── Cloudflare R2 (S3-compatible) ────────────────────────────
 boto3==1.35.0
 
+# ── Password hashing (CMS console admin sign-in) ─────────────
+# The portal's own auth uses stdlib PBKDF2 (app/services/auth_service.py). The
+# CMS console verifies against a bcrypt hash supplied via CMS_ADMIN_PASSWORD_HASH;
+# generate it locally with scripts/make_admin_hash.py.
+bcrypt==4.2.1
+
 # ── Utilities ────────────────────────────────────────────────
 python-dotenv==1.0.1
 
