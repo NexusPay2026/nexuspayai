@@ -118,6 +118,8 @@ ALLOWED_ORIGINS = [
     "https://matrix.nexuspayai.com",
     "https://dashboard.nexuspayservices.com",
     # 6. Calcerta Group / Interstellar I.S. customer-facing site
+    "https://calcerta.com",
+    "https://www.calcerta.com",
     "https://isinterstellar.com",
     "https://www.isinterstellar.com",
     # Dev

@@ -4,7 +4,7 @@
 > travels with the code and is visible to any collaborator or Claude Code
 > session. Update it as phases complete.
 
-**Last updated:** 2026-07-12 (First test suite + CI — pytest smoke tests on auth + audit paths, GitHub Actions, pip-audit, dependency bumps)
+**Last updated:** 2026-07-24 (Calcerta chatbot launch prep — added calcerta.com to CORS, reconciled /api/chatbot/message to spec, confidential sponsor-bank prompt kept; follows the first test suite + CI landing on main)
 **Current main commit:** backend `c8b8a02` (provenance receipt UI merged). Portal compliance citation fix on branch `fix/compliance-citations-5-2-212` — pending PR merge + **manual** Netlify deploy (portal is not git-connected; merging main does NOT auto-deploy the portal).
 **Production status at last update:** healthy — all 4 AI providers live, R2 configured, login working, Phase 0 security hardening DEPLOYED, email verification DEPLOYED, password reset DEPLOYED (all via Resend). **Phase 0 is now fully closed.** `/health` exposes the live git commit.
 

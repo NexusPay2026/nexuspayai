@@ -15,7 +15,7 @@ Required environment variable on Render:
     ANTHROPIC_API_KEY = sk-ant-...
 
 Optional environment variables:
-    ANTHROPIC_CHATBOT_MODEL = claude-haiku-4-5  (default; cheapest, fastest)
+    ANTHROPIC_CHATBOT_MODEL = claude-haiku-4-5-20251001  (default; cheapest, fastest)
     CHATBOT_DEBUG = false                       (set true to expose verbose error details)
 
 Endpoints exposed (after prefix="/api" applied at registration):
@@ -46,7 +46,10 @@ router = APIRouter(prefix="/chatbot", tags=["chatbot"])
 # CONFIG
 # ============================================================
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_CHATBOT_MODEL", "claude-haiku-4-5").strip()
+# `... or "<default>"` so an UNSET, EMPTY, or whitespace-only env var all fall back
+# to the known-good default (a blank Render var otherwise sends model="" -> every
+# call fails). Mirrors the set-but-empty hardening in app/config.py.
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_CHATBOT_MODEL", "").strip() or "claude-haiku-4-5-20251001"
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 DEBUG_MODE = os.environ.get("CHATBOT_DEBUG", "false").lower() == "true"
@@ -233,7 +236,7 @@ async def chatbot_message(req: ChatRequest, request: Request) -> ChatResponse:
 
     # Build messages array for Anthropic
     messages = []
-    for h in req.history[-10:]:
+    for h in req.history[-20:]:
         messages.append({"role": h.role, "content": h.content})
     messages.append({"role": "user", "content": req.message})
 
@@ -245,7 +248,7 @@ async def chatbot_message(req: ChatRequest, request: Request) -> ChatResponse:
 
     payload = {
         "model": ANTHROPIC_MODEL,
-        "max_tokens": 800,
+        "max_tokens": 1000,
         "system": system_prompt,
         "messages": messages,
     }
